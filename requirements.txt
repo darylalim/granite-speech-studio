@@ -1,7 +1,0 @@
-pytest
-pyright
-ruff
-streamlit
-torch
-torchaudio
-transformers

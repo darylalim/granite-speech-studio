@@ -1,23 +1,23 @@
 import io
 import json
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import streamlit as st
 import torch
 import torchaudio
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-from transformers import (
-    AutoModelForSpeechSeq2Seq,
-    AutoProcessor,
-    PreTrainedTokenizerBase,
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+warnings.filterwarnings(
+    "ignore", message="An output with one or more elements was resized"
 )
 
 MODEL_OPTIONS = {
-    "Granite Speech 3.3 8b": "ibm-granite/granite-speech-3.3-8b",
     "Granite Speech 3.3 2b": "ibm-granite/granite-speech-3.3-2b",
+    "Granite Speech 3.3 8b": "ibm-granite/granite-speech-3.3-8b",
 }
 SYSTEM_PROMPT_TEMPLATE = """Knowledge Cutoff Date: April 2024.
 Today's Date: {today}.
@@ -42,13 +42,13 @@ def get_device() -> str:
 def load_model(
     model_id: str,
     device: str,
-) -> tuple[AutoModelForSpeechSeq2Seq, AutoProcessor, PreTrainedTokenizerBase]:
+) -> tuple[AutoModelForSpeechSeq2Seq, AutoProcessor]:
     processor = AutoProcessor.from_pretrained(model_id)
     dtype = torch.float32 if device == "cpu" else torch.bfloat16
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         model_id, device_map=device, dtype=dtype
     )
-    return model, processor, processor.tokenizer
+    return model, processor
 
 
 def load_and_preprocess_audio(audio_file: UploadedFile) -> tuple[torch.Tensor, float]:
@@ -71,11 +71,11 @@ def transcribe_audio(
     prompt: str,
     model: AutoModelForSpeechSeq2Seq,
     processor: AutoProcessor,
-    tokenizer: PreTrainedTokenizerBase,
     device: str,
 ) -> tuple[str, float]:
     start = time.perf_counter()
     today = datetime.today().strftime("%B %d, %Y")
+    tokenizer = processor.tokenizer
     chat = [
         {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(today=today)},
         {"role": "user", "content": f"<|audio|>{prompt}"},
@@ -91,14 +91,6 @@ def transcribe_audio(
     return transcript, round(time.perf_counter() - start, 2)
 
 
-def display_metrics(result: dict[str, Any]) -> None:
-    cols = st.columns(4)
-    cols[0].metric("Model", result["model"].split("/")[-1])
-    cols[1].metric("Audio Duration", f"{result['audio_duration']:.2f}s")
-    cols[2].metric("Words", result["num_words"])
-    cols[3].metric("Eval Duration", f"{result['eval_duration']}s")
-
-
 def main() -> None:
     st.set_page_config(page_title="Granite Speech Pipeline", page_icon="🎙️")
     st.title("🎙️ Granite Speech Pipeline")
@@ -107,7 +99,7 @@ def main() -> None:
     model_choice = st.radio("Select model", list(MODEL_OPTIONS.keys()), horizontal=True)
     device = get_device()
     with st.spinner(f"Loading model on {device.upper()}..."):
-        model, processor, tokenizer = load_model(MODEL_OPTIONS[model_choice], device)
+        model, processor = load_model(MODEL_OPTIONS[model_choice], device)
 
     audio_file = st.file_uploader(
         "Upload audio file",
@@ -124,7 +116,7 @@ def main() -> None:
             try:
                 wav, audio_duration = load_and_preprocess_audio(audio_file)
                 transcript, eval_duration = transcribe_audio(
-                    wav, user_prompt, model, processor, tokenizer, device
+                    wav, user_prompt, model, processor, device
                 )
                 result = {
                     "model": MODEL_OPTIONS[model_choice],
@@ -142,7 +134,11 @@ def main() -> None:
 
         st.subheader("Transcription")
         st.write(result["transcript"])
-        display_metrics(result)
+        st.caption(f"Model: {result['model'].split('/')[-1]}")
+        cols = st.columns(3)
+        cols[0].metric("Audio Duration", f"{result['audio_duration']:.2f}s")
+        cols[1].metric("Words", result["num_words"])
+        cols[2].metric("Eval Duration", f"{result['eval_duration']}s")
         st.download_button(
             "Download",
             json.dumps(result, indent=2),

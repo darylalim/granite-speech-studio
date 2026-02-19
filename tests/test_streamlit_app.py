@@ -5,6 +5,8 @@ import pytest
 import torch
 
 from streamlit_app import (
+    MODEL_OPTIONS,
+    PROMPT_CHOICES,
     SUPPORTED_FORMATS,
     get_device,
     load_and_preprocess_audio,
@@ -31,6 +33,28 @@ class TestGetDevice:
         mock_torch.backends.mps.is_available.return_value = False
         mock_torch.cuda.is_available.return_value = False
         assert get_device() == "cpu"
+
+
+class TestModelOptions:
+    def test_default_is_2b(self) -> None:
+        first_key = next(iter(MODEL_OPTIONS))
+        assert "2b" in first_key
+
+    def test_all_models_present(self) -> None:
+        values = set(MODEL_OPTIONS.values())
+        assert values == {
+            "ibm-granite/granite-speech-3.3-2b",
+            "ibm-granite/granite-speech-3.3-8b",
+        }
+
+
+class TestPromptChoices:
+    def test_includes_transcription(self) -> None:
+        assert any("Transcribe" in p for p in PROMPT_CHOICES)
+
+    def test_includes_translations(self) -> None:
+        for lang in ("French", "German", "Spanish", "Portuguese"):
+            assert any(lang in p for p in PROMPT_CHOICES)
 
 
 class TestSupportedFormats:

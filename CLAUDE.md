@@ -9,18 +9,16 @@ Streamlit web app for automatic speech recognition and translation using IBM's [
 ## Setup
 
 ```bash
-python3.12 -m venv streamlit_env
-source streamlit_env/bin/activate
-pip install -r requirements.txt
-streamlit run streamlit_app.py
+uv sync
+uv run streamlit run streamlit_app.py
 ```
 
 ## Commands
 
-- **Lint**: `ruff check .`
-- **Format**: `ruff format .`
-- **Typecheck**: `pyright`
-- **Test**: `pytest`
+- **Lint**: `uv run ruff check .`
+- **Format**: `uv run ruff format .`
+- **Typecheck**: `uv run ty check`
+- **Test**: `uv run pytest`
 
 ## Code Style
 
@@ -31,27 +29,26 @@ streamlit run streamlit_app.py
 
 ## Dependencies
 
-- `transformers` - Hugging Face model loading
-- `torch` - Tensor operations
-- `torchaudio` - Audio loading and resampling
-- `streamlit` - Web user interface
+- `transformers` — Hugging Face model loading
+- `accelerate` — device mapping for model loading
+- `peft` — LoRA adapter loading for Granite Speech models
+- `torch` — tensor operations
+- `torchaudio` — audio loading and resampling
+- `torchcodec` — audio decoding backend for torchaudio
+- `streamlit` — web user interface
 - `ruff` — linting/formatting (dev)
-- `pyright` — type checking (dev)
+- `ty` — type checking (dev)
 - `pytest` — testing (dev)
 
 ## Configuration
 
-`pyproject.toml` — ruff isort (`combine-as-imports`) and pyright (`pythonVersion = "3.12"`).
+`pyproject.toml` — ruff isort (`combine-as-imports`) and ty (`python-version = "3.12"`).
 
 ## Architecture
 
-### Entry Point
-
-`streamlit_app.py` - single-file app.
+`streamlit_app.py` — single-file app.
 
 ### Models
-
-Granite Speech models selected via `st.radio`:
 
 - [Granite Speech 3.3 2b](https://huggingface.co/ibm-granite/granite-speech-3.3-2b)
 - [Granite Speech 3.3 8b](https://huggingface.co/ibm-granite/granite-speech-3.3-8b)
@@ -59,46 +56,41 @@ Granite Speech models selected via `st.radio`:
 ### Languages
 
 - English (transcription)
-- French (translation)
-- German (translation)
-- Spanish (translation)
-- Portuguese (translation)
-
-### Performance
-
-- Use best available device: MPS > CUDA > CPU
-- `@st.cache_resource` to cache models
-- `@torch.inference_mode()` on inference functions
-- `io.BytesIO` for in-memory audio loading (no temp files)
-- `dtype` is bfloat16 on MPS and CUDA, float32 on CPU
-- `time.perf_counter()` for timing (fractional seconds)
+- French, German, Spanish, Portuguese (translation)
 
 ### Audio Formats
 
-Supported: wav, mp3, m4a, ogg, flac, webm, aac
+wav, mp3, m4a, ogg, flac, webm, aac
+
+### Performance
+
+- Best available device: MPS > CUDA > CPU
+- `@st.cache_resource` to cache models
+- `@torch.inference_mode()` on inference functions
+- `io.BytesIO` for in-memory audio loading (no temp files)
+- bfloat16 on MPS/CUDA, float32 on CPU
+- `time.perf_counter()` for timing
 
 ### Error Handling
 
 - `RuntimeError` caught explicitly for transcription failures
-- Unexpected exceptions shown with `st.exception()` for debugging
+- Unexpected exceptions shown with `st.exception()`
 
 ### JSON Download
 
 Fields in the downloadable JSON via `st.download_button`:
 
 - `model` (string) — model name
-- `audio_duration` (float) — audio duration in seconds
+- `audio_duration` (float) — duration in seconds
 - `transcript` (string) — generated text
 - `num_words` (int) — word count
 - `eval_duration` (float) — transcription time in seconds (rounded to 2 decimal places)
 
-### Metrics
-
-`st.metric` displays all JSON fields except transcript.
+Model shown via `st.caption`. `st.metric` displays audio duration, words, and eval duration.
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, supported formats, audio loading, and error handling. Run with `pytest`.
+`tests/test_streamlit_app.py` — unit tests for device detection, model options, prompt choices, supported formats, audio loading, and error handling.
 
 ## Resources
 

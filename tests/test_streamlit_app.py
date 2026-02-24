@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from streamlit_app import (
+    MODEL_ID,
     PROMPT_CHOICES,
     SUPPORTED_FORMATS,
     get_device,
@@ -12,6 +13,11 @@ from streamlit_app import (
 )
 
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
+
+
+class TestModelId:
+    def test_model_id(self) -> None:
+        assert MODEL_ID == "ibm-granite/granite-speech-3.3-2b"
 
 
 class TestGetDevice:

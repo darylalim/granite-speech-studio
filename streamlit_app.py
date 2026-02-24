@@ -116,6 +116,13 @@ def main() -> None:
         recorded = st.audio_input("Record audio")
 
     audio_file = recorded or uploaded
+
+    input_key = (audio_file.name, audio_file.size, task) if audio_file else None
+    if input_key != st.session_state.get("_last_input_key"):
+        st.session_state.pop("result", None)
+        st.session_state.pop("result_filename", None)
+        st.session_state["_last_input_key"] = input_key
+
     if audio_file:
         st.audio(audio_file)
 

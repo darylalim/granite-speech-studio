@@ -48,15 +48,21 @@ uv run streamlit run streamlit_app.py
 
 `streamlit_app.py` — single-file app.
 
-### Models
+### Model
 
 - [Granite Speech 3.3 2b](https://huggingface.co/ibm-granite/granite-speech-3.3-2b)
-- [Granite Speech 3.3 8b](https://huggingface.co/ibm-granite/granite-speech-3.3-8b)
 
 ### Languages
 
 - English (transcription)
 - French, German, Spanish, Portuguese (translation)
+
+### UI Layout
+
+- **Sidebar** — model name, device, link to model card
+- **Task selection** — `st.pills` with short labels mapped to full prompt strings via `PROMPT_CHOICES` dict
+- **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
+- **Results** — persisted in `st.session_state`, displayed in a bordered container
 
 ### Audio Formats
 
@@ -76,21 +82,16 @@ wav, mp3, m4a, ogg, flac, webm, aac
 - `RuntimeError` caught explicitly for transcription failures
 - Unexpected exceptions shown with `st.exception()`
 
-### JSON Download
+### Downloads
 
-Fields in the downloadable JSON via `st.download_button`:
+- **Text** — plain transcript as `.txt`
+- **JSON** — `model`, `audio_duration`, `transcript`, `num_words`, `eval_duration`
 
-- `model` (string) — model name
-- `audio_duration` (float) — duration in seconds
-- `transcript` (string) — generated text
-- `num_words` (int) — word count
-- `eval_duration` (float) — transcription time in seconds (rounded to 2 decimal places)
-
-Model shown via `st.caption`. `st.metric` displays audio duration, words, and eval duration.
+`st.metric` displays audio duration, words, and processing time.
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, model options, prompt choices, supported formats, audio loading, and error handling.
+`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, audio loading, and error handling.
 
 ## Resources
 

@@ -5,7 +5,6 @@ import pytest
 import torch
 
 from streamlit_app import (
-    MODEL_OPTIONS,
     PROMPT_CHOICES,
     SUPPORTED_FORMATS,
     get_device,
@@ -35,26 +34,16 @@ class TestGetDevice:
         assert get_device() == "cpu"
 
 
-class TestModelOptions:
-    def test_default_is_2b(self) -> None:
-        first_key = next(iter(MODEL_OPTIONS))
-        assert "2b" in first_key
-
-    def test_all_models_present(self) -> None:
-        values = set(MODEL_OPTIONS.values())
-        assert values == {
-            "ibm-granite/granite-speech-3.3-2b",
-            "ibm-granite/granite-speech-3.3-8b",
-        }
-
-
 class TestPromptChoices:
     def test_includes_transcription(self) -> None:
-        assert any("Transcribe" in p for p in PROMPT_CHOICES)
+        assert "Transcribe" in PROMPT_CHOICES
+        assert "Transcribe" in PROMPT_CHOICES["Transcribe"]
 
     def test_includes_translations(self) -> None:
         for lang in ("French", "German", "Spanish", "Portuguese"):
-            assert any(lang in p for p in PROMPT_CHOICES)
+            assert lang in PROMPT_CHOICES
+            assert lang in PROMPT_CHOICES[lang]
+
 
 
 class TestSupportedFormats:

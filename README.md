@@ -4,12 +4,11 @@ Streamlit web app for automatic speech recognition and translation using IBM's G
 
 ## Features
 
-- **Model Selection** — Granite Speech 3.3 2B (default) or 8B
 - **Transcription** — speech to text
 - **Translation** — speech to French, German, Spanish, or Portuguese
-- **Audio Formats** — WAV, MP3, M4A, OGG, FLAC, WebM, AAC
-- **Metrics** — model, audio duration, word count, eval duration
-- **JSON Export** — download results
+- **Audio Input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
+- **Metrics** — audio duration, word count, processing time
+- **Export** — download transcript as text or JSON
 
 ## Hardware Support
 
@@ -28,11 +27,10 @@ uv run streamlit run streamlit_app.py
 
 ## Usage
 
-1. Select a model (8B for higher quality, 2B for faster inference)
-2. Upload an audio file
-3. Choose a prompt (transcribe or translate)
-4. Click "Transcribe" to process
-5. View results and download as JSON
+1. Select a task (transcribe or translate to a language)
+2. Upload an audio file or record from your microphone
+3. Click "Transcribe" or "Translate" to process
+4. View results and download as text or JSON
 
 ## Development
 

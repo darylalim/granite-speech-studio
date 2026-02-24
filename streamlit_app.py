@@ -15,20 +15,17 @@ warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
 )
 
-MODEL_OPTIONS = {
-    "Granite Speech 3.3 2b": "ibm-granite/granite-speech-3.3-2b",
-    "Granite Speech 3.3 8b": "ibm-granite/granite-speech-3.3-8b",
-}
+MODEL_ID = "ibm-granite/granite-speech-3.3-2b"
 SYSTEM_PROMPT_TEMPLATE = """Knowledge Cutoff Date: April 2024.
 Today's Date: {today}.
 You are Granite, developed by IBM. You are a helpful AI assistant"""
-PROMPT_CHOICES = [
-    "Transcribe the speech to text",
-    "Translate the speech to French",
-    "Translate the speech to German",
-    "Translate the speech to Spanish",
-    "Translate the speech to Portuguese",
-]
+PROMPT_CHOICES = {
+    "Transcribe": "Transcribe the speech to text",
+    "French": "Translate the speech to French",
+    "German": "Translate the speech to German",
+    "Spanish": "Translate the speech to Spanish",
+    "Portuguese": "Translate the speech to Portuguese",
+}
 SUPPORTED_FORMATS = ["wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"]
 
 
@@ -93,58 +90,88 @@ def transcribe_audio(
 
 def main() -> None:
     st.set_page_config(page_title="Granite Speech Pipeline", page_icon="🎙️")
-    st.title("🎙️ Granite Speech Pipeline")
-    st.write("Upload an audio file and try one of the prompts.")
 
-    model_choice = st.radio("Select model", list(MODEL_OPTIONS.keys()), horizontal=True)
     device = get_device()
+
+    with st.sidebar:
+        st.caption(f"Model: {MODEL_ID.split('/')[-1]}")
+        st.caption(f"Running on {device.upper()}")
+        st.link_button("Model Card", f"https://huggingface.co/{MODEL_ID}")
+
+    st.title("🎙️ Granite Speech Pipeline")
+
     with st.spinner(f"Loading model on {device.upper()}..."):
-        model, processor = load_model(MODEL_OPTIONS[model_choice], device)
+        model, processor = load_model(MODEL_ID, device)
 
-    audio_file = st.file_uploader(
-        "Upload audio file",
-        type=SUPPORTED_FORMATS,
-        help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}",
-    )
+    task = st.pills("Task", options=list(PROMPT_CHOICES.keys()), default="Transcribe")
+
+    upload_tab, record_tab = st.tabs(["Upload", "Record"])
+    with upload_tab:
+        uploaded = st.file_uploader(
+            "Upload audio file",
+            type=SUPPORTED_FORMATS,
+            help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}",
+        )
+    with record_tab:
+        recorded = st.audio_input("Record audio")
+
+    audio_file = recorded or uploaded
     if audio_file:
-        st.audio(audio_file, format=f"audio/{Path(audio_file.name).suffix[1:]}")
+        st.audio(audio_file)
 
-    user_prompt = st.selectbox("Select prompt", PROMPT_CHOICES)
+    is_translate = task is not None and task != "Transcribe"
+    button_label = "Translate" if is_translate else "Transcribe"
+    can_run = audio_file is not None and task is not None
 
-    if st.button("Transcribe", type="primary", disabled=not audio_file) and audio_file:
-        with st.spinner("Transcribing audio..."):
+    if st.button(button_label, type="primary", disabled=not can_run) and can_run:
+        user_prompt = PROMPT_CHOICES[task]
+        with st.spinner(
+            f"{'Translating' if is_translate else 'Transcribing'} audio..."
+        ):
             try:
                 wav, audio_duration = load_and_preprocess_audio(audio_file)
                 transcript, eval_duration = transcribe_audio(
                     wav, user_prompt, model, processor, device
                 )
-                result = {
-                    "model": MODEL_OPTIONS[model_choice],
+                st.session_state.result = {
+                    "model": MODEL_ID,
                     "audio_duration": audio_duration,
                     "transcript": transcript,
                     "num_words": len(transcript.split()),
                     "eval_duration": eval_duration,
                 }
+                st.session_state.result_filename = (
+                    f"{Path(audio_file.name).stem}_transcription.json"
+                )
             except RuntimeError as e:
                 st.error(str(e))
                 return
             except Exception as e:
                 st.exception(e)
                 return
+        st.toast("Done!")
 
-        st.subheader("Transcription")
-        st.write(result["transcript"])
-        st.caption(f"Model: {result['model'].split('/')[-1]}")
-        cols = st.columns(3)
-        cols[0].metric("Audio Duration", f"{result['audio_duration']:.2f}s")
-        cols[1].metric("Words", result["num_words"])
-        cols[2].metric("Eval Duration", f"{result['eval_duration']}s")
-        st.download_button(
-            "Download",
-            json.dumps(result, indent=2),
-            f"{Path(audio_file.name).stem}_transcription.json",
-            "application/json",
-        )
+    if "result" in st.session_state:
+        result = st.session_state.result
+        with st.container(border=True):
+            st.code(result["transcript"], language=None)
+            cols = st.columns(3)
+            cols[0].metric("Audio Duration", f"{result['audio_duration']:.2f}s")
+            cols[1].metric("Words", result["num_words"])
+            cols[2].metric("Processing Time", f"{result['eval_duration']}s")
+            dl_cols = st.columns(2)
+            dl_cols[0].download_button(
+                "Download Text",
+                result["transcript"],
+                st.session_state.result_filename.replace(".json", ".txt"),
+                "text/plain",
+            )
+            dl_cols[1].download_button(
+                "Download JSON",
+                json.dumps(result, indent=2),
+                st.session_state.result_filename,
+                "application/json",
+            )
 
 
 if __name__ == "__main__":

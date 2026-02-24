@@ -125,6 +125,8 @@ def main() -> None:
 
     if audio_file:
         st.audio(audio_file)
+        caption = "Recorded audio" if recorded else audio_file.name
+        st.caption(caption)
 
     is_translate = task is not None and task != "Transcribe"
     button_label = "Translate" if is_translate else "Transcribe"

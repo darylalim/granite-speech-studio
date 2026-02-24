@@ -44,6 +44,10 @@ class TestPromptChoices:
             assert lang in PROMPT_CHOICES
             assert lang in PROMPT_CHOICES[lang]
 
+    def test_translation_prompt_prefixes(self) -> None:
+        for key, value in PROMPT_CHOICES.items():
+            if key != "Transcribe":
+                assert value.startswith("Translate the speech to ")
 
 
 class TestSupportedFormats:

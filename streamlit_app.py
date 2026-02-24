@@ -147,9 +147,10 @@ def main() -> None:
                     "num_words": len(transcript.split()),
                     "eval_duration": eval_duration,
                 }
-                st.session_state.result_filename = (
-                    f"{Path(audio_file.name).stem}_transcription.json"
-                )
+                stem = Path(audio_file.name).stem
+                if audio_file.name == "audio.wav":
+                    stem = datetime.now().strftime("recording_%Y%m%d_%H%M%S")
+                st.session_state.result_filename = f"{stem}_transcription.json"
             except RuntimeError as e:
                 st.error(str(e))
                 return

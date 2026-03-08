@@ -131,21 +131,33 @@ def run_pipeline(
 
 
 def main() -> None:
-    st.set_page_config(page_title="Granite Speech Pipeline", page_icon="🎙️")
+    st.set_page_config(
+        page_title="Granite Speech Pipeline",
+        page_icon="\U0001f399\ufe0f",
+        layout="wide",
+    )
 
     device = get_device()
 
-    with st.sidebar:
-        st.caption(f"Model: {MODEL_ID.split('/')[-1]}")
-        st.caption(f"Running on {device.upper()}")
-        st.link_button("Model Card", f"https://huggingface.co/{MODEL_ID}")
-
-    st.title("🎙️ Granite Speech Pipeline")
+    st.title("\U0001f399\ufe0f Granite Speech Pipeline")
 
     with st.spinner(f"Loading model on {device.upper()}..."):
         model, processor = load_model(MODEL_ID, device)
 
-    task = st.pills("Task", options=list(PROMPT_CHOICES.keys()), default="Transcribe")
+    preset = st.pills(
+        "Preset",
+        options=list(TASK_PRESETS.keys()),
+        default=None,
+    )
+
+    default_tasks = TASK_PRESETS[preset] if preset else []
+    selected_tasks = st.multiselect(
+        "Tasks",
+        options=list(PROMPT_CHOICES.keys()),
+        default=default_tasks,
+    )
+
+    tasks = get_selected_tasks(preset, selected_tasks)
 
     upload_tab, record_tab = st.tabs(["Upload", "Record"])
     with upload_tab:
@@ -159,10 +171,11 @@ def main() -> None:
 
     audio_file = recorded or uploaded
 
-    input_key = (audio_file.name, audio_file.size, task) if audio_file else None
+    input_key = (audio_file.name, audio_file.size, tuple(tasks)) if audio_file else None
     if input_key != st.session_state.get("_last_input_key"):
-        st.session_state.pop("result", None)
+        st.session_state.pop("results", None)
         st.session_state.pop("result_filename", None)
+        st.session_state.pop("audio_duration", None)
         st.session_state["_last_input_key"] = input_key
 
     if audio_file:
@@ -170,60 +183,104 @@ def main() -> None:
         caption = "Recorded audio" if recorded else audio_file.name
         st.caption(caption)
 
-    is_translate = task is not None and task != "Transcribe"
-    button_label = "Translate" if is_translate else "Transcribe"
-    can_run = audio_file is not None and task is not None
+    can_run = audio_file is not None and len(tasks) > 0
 
-    if st.button(button_label, type="primary", disabled=not can_run) and can_run:
-        user_prompt = PROMPT_CHOICES[task]
-        with st.spinner(
-            f"{'Translating' if is_translate else 'Transcribing'} audio..."
-        ):
-            try:
-                wav, audio_duration = load_and_preprocess_audio(audio_file)
-                transcript, eval_duration = transcribe_audio(
-                    wav, user_prompt, model, processor, device
+    if st.button("Run Pipeline", type="primary", disabled=not can_run) and can_run:
+        progress = st.progress(0, text="Starting pipeline...")
+        try:
+            wav, audio_duration = load_and_preprocess_audio(audio_file)
+            pipeline_results: dict[str, dict[str, object]] = {}
+            for i, task in enumerate(tasks):
+                progress.progress(
+                    (i) / len(tasks),
+                    text=f"Processing: {task}...",
                 )
-                st.session_state.result = {
-                    "model": MODEL_ID,
-                    "audio_duration": audio_duration,
+                prompt = PROMPT_CHOICES[task]
+                transcript, eval_duration = transcribe_audio(
+                    wav, prompt, model, processor, device
+                )
+                pipeline_results[task] = {
                     "transcript": transcript,
                     "num_words": len(transcript.split()),
                     "eval_duration": eval_duration,
                 }
-                stem = Path(audio_file.name).stem
-                if audio_file.name == "audio.wav":
-                    stem = datetime.now().strftime("recording_%Y%m%d_%H%M%S")
-                st.session_state.result_filename = f"{stem}_transcription.json"
-            except RuntimeError as e:
-                st.error(str(e))
-                return
-            except Exception as e:
-                st.exception(e)
-                return
-        st.toast("Done!")
+            progress.progress(1.0, text="Done!")
+            st.session_state.results = pipeline_results
+            st.session_state.audio_duration = audio_duration
+            stem = Path(audio_file.name).stem
+            if audio_file.name == "audio.wav":
+                stem = datetime.now().strftime("recording_%Y%m%d_%H%M%S")
+            st.session_state.result_filename = f"{stem}_pipeline.json"
+        except RuntimeError as e:
+            st.error(str(e))
+            return
+        except Exception as e:
+            st.exception(e)
+            return
+        st.toast("Pipeline complete!")
 
-    if "result" in st.session_state:
-        result = st.session_state.result
-        with st.container(border=True):
-            st.code(result["transcript"], language=None)
-            cols = st.columns(3)
-            cols[0].metric("Audio Duration", f"{result['audio_duration']:.2f}s")
-            cols[1].metric("Words", result["num_words"])
-            cols[2].metric("Processing Time", f"{result['eval_duration']}s")
-            dl_cols = st.columns(2)
-            dl_cols[0].download_button(
-                "Download Text",
-                result["transcript"],
-                st.session_state.result_filename.replace(".json", ".txt"),
-                "text/plain",
-            )
-            dl_cols[1].download_button(
-                "Download JSON",
-                json.dumps(result, indent=2),
-                st.session_state.result_filename,
-                "application/json",
-            )
+    if "results" in st.session_state:
+        results = st.session_state.results
+        audio_duration = st.session_state.audio_duration
+        task_names = list(results.keys())
+
+        num_cols = min(len(task_names), 3)
+        for row_start in range(0, len(task_names), num_cols):
+            row_tasks = task_names[row_start : row_start + num_cols]
+            cols = st.columns(num_cols)
+            for col, task_name in zip(cols, row_tasks):
+                result = results[task_name]
+                with col:
+                    with st.container(border=True):
+                        st.subheader(task_name)
+                        st.code(result["transcript"], language=None)
+                        m_cols = st.columns(3)
+                        m_cols[0].metric("Duration", f"{audio_duration:.2f}s")
+                        m_cols[1].metric("Words", result["num_words"])
+                        m_cols[2].metric("Time", f"{result['eval_duration']}s")
+                        dl_cols = st.columns(2)
+                        stem = st.session_state.result_filename.replace(
+                            "_pipeline.json", ""
+                        )
+                        dl_cols[0].download_button(
+                            "Text",
+                            result["transcript"],
+                            f"{stem}_{task_name.lower().replace(' ', '_')}.txt",
+                            "text/plain",
+                            key=f"dl_txt_{task_name}",
+                        )
+                        dl_cols[1].download_button(
+                            "JSON",
+                            json.dumps(
+                                {
+                                    "model": MODEL_ID,
+                                    "task": task_name,
+                                    "audio_duration": audio_duration,
+                                    **result,
+                                },
+                                indent=2,
+                            ),
+                            f"{stem}_{task_name.lower().replace(' ', '_')}.json",
+                            "application/json",
+                            key=f"dl_json_{task_name}",
+                        )
+
+        combined = {
+            "model": MODEL_ID,
+            "audio_duration": audio_duration,
+            "results": results,
+        }
+        st.download_button(
+            "Download All (JSON)",
+            json.dumps(combined, indent=2),
+            st.session_state.result_filename,
+            "application/json",
+        )
+
+    st.caption(
+        f"Model: {MODEL_ID.split('/')[-1]} | Device: {device.upper()} | "
+        f"[Model Card](https://huggingface.co/{MODEL_ID})"
+    )
 
 
 if __name__ == "__main__":

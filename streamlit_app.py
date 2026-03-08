@@ -108,6 +108,28 @@ def transcribe_audio(
     return transcript, round(time.perf_counter() - start, 2)
 
 
+@torch.inference_mode()
+def run_pipeline(
+    wav: torch.Tensor,
+    tasks: list[str],
+    model: AutoModelForSpeechSeq2Seq,
+    processor: AutoProcessor,
+    device: str,
+) -> dict[str, dict[str, object]]:
+    results: dict[str, dict[str, object]] = {}
+    for task in tasks:
+        prompt = PROMPT_CHOICES[task]
+        transcript, eval_duration = transcribe_audio.__wrapped__(
+            wav, prompt, model, processor, device
+        )
+        results[task] = {
+            "transcript": transcript,
+            "num_words": len(transcript.split()),
+            "eval_duration": eval_duration,
+        }
+    return results
+
+
 def main() -> None:
     st.set_page_config(page_title="Granite Speech Pipeline", page_icon="🎙️")
 

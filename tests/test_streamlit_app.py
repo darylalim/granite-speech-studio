@@ -13,6 +13,7 @@ from streamlit_app import (
     get_selected_tasks,
     load_and_preprocess_audio,
     load_model,
+    run_pipeline,
     transcribe_audio,
 )
 
@@ -229,3 +230,48 @@ class TestTranscribeAudio:
         assert call_kwargs["skip_special_tokens"] is True
         assert call_kwargs["add_special_tokens"] is False
         assert transcript == "decoded text"
+
+
+class TestRunPipeline:
+    def _make_mocks(self) -> tuple[MagicMock, MagicMock]:
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "formatted"
+        tokenizer.batch_decode.return_value = ["decoded text"]
+        processor = MagicMock()
+        processor.tokenizer = tokenizer
+        model = MagicMock()
+        return model, processor
+
+    def test_returns_dict_keyed_by_task(self) -> None:
+        model, processor = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+        tasks = ["Transcribe", "French"]
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav, tasks, model, processor, "cpu"
+        )
+
+        assert set(results.keys()) == {"Transcribe", "French"}
+
+    def test_each_result_has_transcript_and_duration(self) -> None:
+        model, processor = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav, ["Transcribe"], model, processor, "cpu"
+        )
+
+        result = results["Transcribe"]
+        assert "transcript" in result
+        assert "eval_duration" in result
+        assert "num_words" in result
+
+    def test_empty_tasks_returns_empty_dict(self) -> None:
+        model, processor = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav, [], model, processor, "cpu"
+        )
+
+        assert results == {}

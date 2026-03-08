@@ -10,6 +10,8 @@ from streamlit_app import (
     SUPPORTED_FORMATS,
     get_device,
     load_and_preprocess_audio,
+    load_model,
+    transcribe_audio,
 )
 
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
@@ -17,7 +19,7 @@ AUDIO_DIR = Path(__file__).parent / "data" / "audio"
 
 class TestModelId:
     def test_model_id(self) -> None:
-        assert MODEL_ID == "ibm-granite/granite-speech-3.3-2b"
+        assert MODEL_ID == "ibm-granite/granite-4.0-1b-speech"
 
 
 class TestGetDevice:
@@ -43,17 +45,28 @@ class TestGetDevice:
 class TestPromptChoices:
     def test_includes_transcription(self) -> None:
         assert "Transcribe" in PROMPT_CHOICES
-        assert "Transcribe" in PROMPT_CHOICES["Transcribe"]
+        assert "transcribe" in PROMPT_CHOICES["Transcribe"]
 
     def test_includes_translations(self) -> None:
-        for lang in ("French", "German", "Spanish", "Portuguese"):
+        for lang in (
+            "French",
+            "German",
+            "Spanish",
+            "Portuguese",
+            "Italian",
+            "Japanese",
+            "Mandarin Chinese",
+        ):
             assert lang in PROMPT_CHOICES
             assert lang in PROMPT_CHOICES[lang]
 
     def test_translation_prompt_prefixes(self) -> None:
         for key, value in PROMPT_CHOICES.items():
             if key != "Transcribe":
-                assert value.startswith("Translate the speech to ")
+                assert value.startswith("translate the speech to ")
+
+    def test_total_count(self) -> None:
+        assert len(PROMPT_CHOICES) == 8
 
 
 class TestSupportedFormats:
@@ -87,3 +100,82 @@ class TestLoadAndPreprocessAudio:
         upload.getvalue.return_value = b"not audio data"
         with pytest.raises(RuntimeError, match="Failed to load audio file"):
             load_and_preprocess_audio(upload)
+
+
+class TestLoadModel:
+    @patch("streamlit_app.AutoProcessor")
+    @patch("streamlit_app.AutoModelForSpeechSeq2Seq")
+    @patch("streamlit_app.st")
+    def test_uses_float32_on_cpu(
+        self,
+        _mock_st: MagicMock,
+        mock_model_cls: MagicMock,
+        mock_processor_cls: MagicMock,
+    ) -> None:
+        load_model.__wrapped__("test-model", "cpu")  # type: ignore[attr-defined]
+        mock_model_cls.from_pretrained.assert_called_once_with(
+            "test-model", device_map="cpu", torch_dtype=torch.float32
+        )
+
+    @patch("streamlit_app.AutoProcessor")
+    @patch("streamlit_app.AutoModelForSpeechSeq2Seq")
+    @patch("streamlit_app.st")
+    def test_uses_bfloat16_on_gpu(
+        self,
+        _mock_st: MagicMock,
+        mock_model_cls: MagicMock,
+        mock_processor_cls: MagicMock,
+    ) -> None:
+        load_model.__wrapped__("test-model", "cuda")  # type: ignore[attr-defined]
+        mock_model_cls.from_pretrained.assert_called_once_with(
+            "test-model", device_map="cuda", torch_dtype=torch.bfloat16
+        )
+
+
+class TestTranscribeAudio:
+    def _make_mocks(self) -> tuple[MagicMock, MagicMock, MagicMock]:
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "formatted"
+        tokenizer.batch_decode.return_value = ["decoded text"]
+        processor = MagicMock()
+        processor.tokenizer = tokenizer
+        model = MagicMock()
+        return model, processor, tokenizer
+
+    def test_no_system_prompt_in_chat(self) -> None:
+        model, processor, tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
+            wav, "transcribe", model, processor, "cpu"
+        )
+
+        chat_arg = tokenizer.apply_chat_template.call_args[0][0]
+        roles = [msg["role"] for msg in chat_arg]
+        assert "system" not in roles
+        assert roles == ["user"]
+
+    def test_user_content_has_audio_tag(self) -> None:
+        model, processor, tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
+            wav, "test prompt", model, processor, "cpu"
+        )
+
+        chat_arg = tokenizer.apply_chat_template.call_args[0][0]
+        assert chat_arg[0]["content"] == "<|audio|>test prompt"
+
+    def test_uses_batch_decode(self) -> None:
+        model, processor, tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        transcript, _ = transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
+            wav, "transcribe", model, processor, "cpu"
+        )
+
+        tokenizer.batch_decode.assert_called_once()
+        call_kwargs = tokenizer.batch_decode.call_args[1]
+        assert call_kwargs["skip_special_tokens"] is True
+        assert call_kwargs["add_special_tokens"] is False
+        assert transcript == "decoded text"

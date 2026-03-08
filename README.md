@@ -1,14 +1,16 @@
 # Granite Speech Pipeline
 
-Streamlit web app for automatic speech recognition and translation using IBM's Granite Speech models.
+Streamlit web app for speech-to-text and translation using IBM's Granite Speech models. Process audio through multiple tasks simultaneously with preset task groups.
 
 ## Features
 
-- **Transcription** — speech to text
-- **Translation** — speech to French, German, Spanish, Portuguese, Italian, Japanese, or Mandarin Chinese
-- **Audio Input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
-- **Metrics** — audio duration, word count, processing time
-- **Export** — download transcript as text or JSON
+- **Pipeline processing** — run multiple transcription and translation tasks on the same audio
+- **Presets** — All Tasks, European Languages (French, German, Spanish, Portuguese, Italian), Asian Languages (Japanese, Mandarin Chinese), Transcribe Only
+- **Custom selection** — pick individual tasks via multiselect
+- **Audio input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
+- **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
+- **Metrics** — audio duration, word count, processing time per task
+- **Export** — download per-task text/JSON or combined JSON for all results
 
 ## Hardware Support
 
@@ -27,10 +29,10 @@ uv run streamlit run streamlit_app.py
 
 ## Usage
 
-1. Select a task (transcribe or translate to a language)
+1. Select a preset or pick individual tasks (transcribe, translate to a language)
 2. Upload an audio file or record from your microphone
-3. Click "Transcribe" or "Translate" to process
-4. View results and download as text or JSON
+3. Click "Run Pipeline" to process all selected tasks
+4. View side-by-side results and download as text or JSON
 
 ## Development
 

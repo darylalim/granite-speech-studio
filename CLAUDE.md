@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups.
+Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups. Includes toxicity detection via Granite Guardian HAP 38m.
 
 ## Setup
 
@@ -47,9 +47,10 @@ uv run streamlit run streamlit_app.py
 
 `streamlit_app.py` — single-file app.
 
-### Model
+### Models
 
-- [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech)
+- [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
+- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — toxicity detection (runs on CPU)
 
 ### Languages
 
@@ -61,7 +62,8 @@ uv run streamlit run streamlit_app.py
 - **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
 - **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
 - **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) with per-task bordered containers
-- **Footer** — model name, device, link to model card
+- **Safety** — each result shows `st.success` (safe) or `st.warning` (toxic) banner with toxicity score
+- **Footer** — model name, safety model name, device, links to model cards
 
 ### Audio Formats
 
@@ -84,17 +86,18 @@ wav, mp3, m4a, ogg, flac, webm, aac
 ### Downloads
 
 - **Per-task Text** — plain transcript as `.txt`
-- **Per-task JSON** — `model`, `task`, `audio_duration`, `transcript`, `num_words`, `eval_duration`
+- **Per-task JSON** — `model`, `task`, `audio_duration`, `transcript`, `num_words`, `eval_duration`, `is_toxic`, `toxicity_score`
 - **Combined JSON** — "Download All" with `model`, `audio_duration`, and all `results` keyed by task name
 
 `st.metric` displays audio duration, words, and processing time per task.
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, transcription, pipeline execution, and error handling.
+`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, safety checking, transcription, pipeline execution, and error handling.
 
 ## Resources
 
+- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m)
 - [Granite Speech Models](https://huggingface.co/collections/ibm-granite/granite-speech)
 - [Technical Report](https://arxiv.org/abs/2505.08699)
 - [Finetune on custom data](https://github.com/ibm-granite/granite-speech-models/blob/main/notebooks/fine_tuning_granite_speech.ipynb)

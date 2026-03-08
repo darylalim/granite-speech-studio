@@ -31,7 +31,6 @@ uv run streamlit run streamlit_app.py
 
 - `transformers` — Hugging Face model loading
 - `accelerate` — device mapping for model loading
-- `peft` — LoRA adapter loading for Granite Speech models
 - `torch` — tensor operations
 - `torchaudio` — audio loading and resampling
 - `torchcodec` — audio decoding backend for torchaudio
@@ -50,12 +49,12 @@ uv run streamlit run streamlit_app.py
 
 ### Model
 
-- [Granite Speech 3.3 2b](https://huggingface.co/ibm-granite/granite-speech-3.3-2b)
+- [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech)
 
 ### Languages
 
 - English (transcription)
-- French, German, Spanish, Portuguese (translation)
+- French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese (translation)
 
 ### UI Layout
 
@@ -91,7 +90,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, audio loading, and error handling.
+`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, audio loading, model loading, transcription, and error handling.
 
 ## Resources
 

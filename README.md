@@ -5,7 +5,7 @@ Streamlit web app for automatic speech recognition and translation using IBM's G
 ## Features
 
 - **Transcription** — speech to text
-- **Translation** — speech to French, German, Spanish, or Portuguese
+- **Translation** — speech to French, German, Spanish, Portuguese, Italian, Japanese, or Mandarin Chinese
 - **Audio Input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
 - **Metrics** — audio duration, word count, processing time
 - **Export** — download transcript as text or JSON

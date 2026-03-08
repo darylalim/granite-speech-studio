@@ -143,6 +143,8 @@ def run_pipeline(
     model: AutoModelForSpeechSeq2Seq,
     processor: AutoProcessor,
     device: str,
+    guardian_model: AutoModelForSequenceClassification,
+    guardian_tokenizer: AutoTokenizer,
 ) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
     for task in tasks:
@@ -150,10 +152,15 @@ def run_pipeline(
         transcript, eval_duration = transcribe_audio.__wrapped__(
             wav, prompt, model, processor, device
         )
+        is_toxic, toxicity_score = check_safety.__wrapped__(
+            transcript, guardian_model, guardian_tokenizer
+        )
         results[task] = {
             "transcript": transcript,
             "num_words": len(transcript.split()),
             "eval_duration": eval_duration,
+            "is_toxic": is_toxic,
+            "toxicity_score": toxicity_score,
         }
     return results
 

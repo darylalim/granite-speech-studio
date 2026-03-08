@@ -293,32 +293,42 @@ class TestTranscribeAudio:
 
 
 class TestRunPipeline:
-    def _make_mocks(self) -> tuple[MagicMock, MagicMock]:
+    def _make_mocks(self) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
         tokenizer = MagicMock()
         tokenizer.apply_chat_template.return_value = "formatted"
         tokenizer.batch_decode.return_value = ["decoded text"]
         processor = MagicMock()
         processor.tokenizer = tokenizer
         model = MagicMock()
-        return model, processor
+        guardian_tokenizer = MagicMock()
+        guardian_tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
+        guardian_model = MagicMock()
+        guardian_model.return_value.logits = torch.tensor([[5.0, -5.0]])
+        return model, processor, guardian_model, guardian_tokenizer
 
     def test_returns_dict_keyed_by_task(self) -> None:
-        model, processor = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
         tasks = ["Transcribe", "French"]
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, tasks, model, processor, "cpu"
+            wav, tasks, model, processor, "cpu", guardian_model, guardian_tokenizer
         )
 
         assert set(results.keys()) == {"Transcribe", "French"}
 
     def test_each_result_has_transcript_and_duration(self) -> None:
-        model, processor = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, ["Transcribe"], model, processor, "cpu"
+            wav,
+            ["Transcribe"],
+            model,
+            processor,
+            "cpu",
+            guardian_model,
+            guardian_tokenizer,
         )
 
         result = results["Transcribe"]
@@ -327,22 +337,28 @@ class TestRunPipeline:
         assert "num_words" in result
 
     def test_empty_tasks_returns_empty_dict(self) -> None:
-        model, processor = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, [], model, processor, "cpu"
+            wav, [], model, processor, "cpu", guardian_model, guardian_tokenizer
         )
 
         assert results == {}
 
     def test_uses_correct_prompt_per_task(self) -> None:
-        model, processor = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
         tokenizer = processor.tokenizer
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, ["Transcribe", "French"], model, processor, "cpu"
+            wav,
+            ["Transcribe", "French"],
+            model,
+            processor,
+            "cpu",
+            guardian_model,
+            guardian_tokenizer,
         )
 
         calls = tokenizer.apply_chat_template.call_args_list
@@ -353,12 +369,31 @@ class TestRunPipeline:
         assert PROMPT_CHOICES["French"] in second_chat[0]["content"]
 
     def test_preserves_task_order(self) -> None:
-        model, processor = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
         tasks = ["Japanese", "Transcribe", "German"]
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, tasks, model, processor, "cpu"
+            wav, tasks, model, processor, "cpu", guardian_model, guardian_tokenizer
         )
 
         assert list(results.keys()) == tasks
+
+    def test_each_result_has_safety_fields(self) -> None:
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            ["Transcribe"],
+            model,
+            processor,
+            "cpu",
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        result = results["Transcribe"]
+        assert "is_toxic" in result
+        assert "toxicity_score" in result
+        assert result["is_toxic"] is False

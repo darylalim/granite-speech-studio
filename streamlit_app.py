@@ -2,6 +2,7 @@ import io
 import json
 import time
 import warnings
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -145,9 +146,12 @@ def run_pipeline(
     device: str,
     guardian_model: AutoModelForSequenceClassification,
     guardian_tokenizer: AutoTokenizer,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
-    for task in tasks:
+    for i, task in enumerate(tasks):
+        if on_progress:
+            on_progress(i, len(tasks), task)
         prompt = PROMPT_CHOICES[task]
         transcript, eval_duration = transcribe_audio.__wrapped__(
             wav, prompt, model, processor, device
@@ -227,31 +231,20 @@ def main() -> None:
         progress = st.progress(0, text="Starting pipeline...")
         try:
             wav, audio_duration = load_and_preprocess_audio(audio_file)
-            pipeline_results: dict[str, dict[str, object]] = {}
-            total_steps = len(tasks) * 2
-            for i, task in enumerate(tasks):
-                progress.progress(
-                    (i * 2) / total_steps,
-                    text=f"Processing: {task}...",
-                )
-                prompt = PROMPT_CHOICES[task]
-                transcript, eval_duration = transcribe_audio(
-                    wav, prompt, model, processor, device
-                )
-                progress.progress(
-                    (i * 2 + 1) / total_steps,
-                    text=f"Safety check: {task}...",
-                )
-                is_toxic, toxicity_score = check_safety(
-                    transcript, guardian_model, guardian_tokenizer
-                )
-                pipeline_results[task] = {
-                    "transcript": transcript,
-                    "num_words": len(transcript.split()),
-                    "eval_duration": eval_duration,
-                    "is_toxic": is_toxic,
-                    "toxicity_score": toxicity_score,
-                }
+
+            def update_progress(i: int, total: int, task: str) -> None:
+                progress.progress(i / total, text=f"Processing: {task}...")
+
+            pipeline_results = run_pipeline(
+                wav,
+                tasks,
+                model,
+                processor,
+                device,
+                guardian_model,
+                guardian_tokenizer,
+                on_progress=update_progress,
+            )
             progress.progress(1.0, text="Done!")
             st.session_state.results = pipeline_results
             st.session_state.audio_duration = audio_duration

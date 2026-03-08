@@ -58,10 +58,10 @@ uv run streamlit run streamlit_app.py
 
 ### UI Layout
 
-- **Sidebar** — model name, device, link to model card
-- **Task selection** — `st.pills` with short labels mapped to full prompt strings via `PROMPT_CHOICES` dict
+- **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
 - **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
-- **Results** — persisted in `st.session_state`, displayed in a bordered container
+- **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) with per-task bordered containers
+- **Footer** — model name, device, link to model card
 
 ### Audio Formats
 
@@ -83,14 +83,15 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Downloads
 
-- **Text** — plain transcript as `.txt`
-- **JSON** — `model`, `audio_duration`, `transcript`, `num_words`, `eval_duration`
+- **Per-task Text** — plain transcript as `.txt`
+- **Per-task JSON** — `model`, `task`, `audio_duration`, `transcript`, `num_words`, `eval_duration`
+- **Combined JSON** — "Download All" with `model`, `audio_duration`, and all `results` keyed by task name
 
-`st.metric` displays audio duration, words, and processing time.
+`st.metric` displays audio duration, words, and processing time per task.
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, audio loading, model loading, transcription, and error handling.
+`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, transcription, pipeline execution, and error handling.
 
 ## Resources
 

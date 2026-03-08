@@ -42,6 +42,12 @@ TASK_PRESETS: dict[str, list[str]] = {
 }
 
 
+def get_selected_tasks(preset: str | None, custom: list[str]) -> list[str]:
+    if preset is not None:
+        return TASK_PRESETS[preset]
+    return custom
+
+
 def get_device() -> str:
     if torch.backends.mps.is_available():
         return "mps"

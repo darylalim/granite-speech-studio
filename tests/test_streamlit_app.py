@@ -10,6 +10,7 @@ from streamlit_app import (
     SUPPORTED_FORMATS,
     TASK_PRESETS,
     get_device,
+    get_selected_tasks,
     load_and_preprocess_audio,
     load_model,
     transcribe_audio,
@@ -104,6 +105,24 @@ class TestTaskPresets:
                 assert task in PROMPT_CHOICES, (
                     f"{task} in preset '{preset_name}' not in PROMPT_CHOICES"
                 )
+
+
+class TestGetSelectedTasks:
+    def test_preset_returns_preset_tasks(self) -> None:
+        result = get_selected_tasks("European Languages", [])
+        assert result == TASK_PRESETS["European Languages"]
+
+    def test_custom_returns_custom_tasks(self) -> None:
+        result = get_selected_tasks(None, ["French", "Japanese"])
+        assert result == ["French", "Japanese"]
+
+    def test_preset_overrides_custom(self) -> None:
+        result = get_selected_tasks("Asian Languages", ["French", "German"])
+        assert result == TASK_PRESETS["Asian Languages"]
+
+    def test_none_preset_empty_custom_returns_empty(self) -> None:
+        result = get_selected_tasks(None, [])
+        assert result == []
 
 
 class TestLoadAndPreprocessAudio:

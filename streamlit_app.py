@@ -179,6 +179,9 @@ def main() -> None:
     with st.spinner(f"Loading model on {device.upper()}..."):
         model, processor = load_model(MODEL_ID, device)
 
+    with st.spinner("Loading safety model..."):
+        guardian_model, guardian_tokenizer = load_guardian_model(GUARDIAN_MODEL_ID)
+
     preset = st.pills(
         "Preset",
         options=list(TASK_PRESETS.keys()),
@@ -225,19 +228,29 @@ def main() -> None:
         try:
             wav, audio_duration = load_and_preprocess_audio(audio_file)
             pipeline_results: dict[str, dict[str, object]] = {}
+            total_steps = len(tasks) * 2
             for i, task in enumerate(tasks):
                 progress.progress(
-                    (i) / len(tasks),
+                    (i * 2) / total_steps,
                     text=f"Processing: {task}...",
                 )
                 prompt = PROMPT_CHOICES[task]
                 transcript, eval_duration = transcribe_audio(
                     wav, prompt, model, processor, device
                 )
+                progress.progress(
+                    (i * 2 + 1) / total_steps,
+                    text=f"Safety check: {task}...",
+                )
+                is_toxic, toxicity_score = check_safety(
+                    transcript, guardian_model, guardian_tokenizer
+                )
                 pipeline_results[task] = {
                     "transcript": transcript,
                     "num_words": len(transcript.split()),
                     "eval_duration": eval_duration,
+                    "is_toxic": is_toxic,
+                    "toxicity_score": toxicity_score,
                 }
             progress.progress(1.0, text="Done!")
             st.session_state.results = pipeline_results
@@ -273,6 +286,14 @@ def main() -> None:
                         m_cols[0].metric("Duration", f"{audio_duration:.2f}s")
                         m_cols[1].metric("Words", result["num_words"])
                         m_cols[2].metric("Time", f"{result['eval_duration']}s")
+                        if result["is_toxic"]:
+                            st.warning(
+                                f"Toxic content detected (score: {result['toxicity_score']:.1%})"
+                            )
+                        else:
+                            st.success(
+                                f"Content is safe (score: {result['toxicity_score']:.1%})"
+                            )
                         dl_cols = st.columns(2)
                         stem = st.session_state.result_filename.replace(
                             "_pipeline.json", ""
@@ -313,8 +334,11 @@ def main() -> None:
         )
 
     st.caption(
-        f"Model: {MODEL_ID.split('/')[-1]} | Device: {device.upper()} | "
-        f"[Model Card](https://huggingface.co/{MODEL_ID})"
+        f"Model: {MODEL_ID.split('/')[-1]} | "
+        f"Safety: {GUARDIAN_MODEL_ID.split('/')[-1]} | "
+        f"Device: {device.upper()} | "
+        f"[Model Card](https://huggingface.co/{MODEL_ID}) | "
+        f"[Safety Model](https://huggingface.co/{GUARDIAN_MODEL_ID})"
     )
 
 

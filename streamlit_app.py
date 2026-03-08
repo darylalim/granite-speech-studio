@@ -9,13 +9,19 @@ import streamlit as st
 import torch
 import torchaudio
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoModelForSpeechSeq2Seq,
+    AutoProcessor,
+    AutoTokenizer,
+)
 
 warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
 )
 
 MODEL_ID = "ibm-granite/granite-4.0-1b-speech"
+GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-38m"
 PROMPT_CHOICES = {
     "Transcribe": "can you transcribe the speech into a written format?",
     "French": "translate the speech to French",
@@ -79,6 +85,28 @@ def load_and_preprocess_audio(audio_file: UploadedFile) -> tuple[torch.Tensor, f
     if sr != 16000:
         wav = torchaudio.functional.resample(wav, sr, 16000)
     return wav, duration
+
+
+@st.cache_resource(show_spinner=False)
+def load_guardian_model(
+    model_id: str,
+) -> tuple[AutoModelForSequenceClassification, AutoTokenizer]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForSequenceClassification.from_pretrained(model_id)
+    return model, tokenizer
+
+
+@torch.inference_mode()
+def check_safety(
+    text: str,
+    model: AutoModelForSequenceClassification,
+    tokenizer: AutoTokenizer,
+) -> tuple[bool, float]:
+    inputs = tokenizer([text], padding=True, truncation=True, return_tensors="pt")
+    logits = model(**inputs).logits
+    probability = torch.softmax(logits, dim=1)[0, 1].item()
+    is_toxic = probability > 0.5
+    return is_toxic, round(probability, 4)
 
 
 @torch.inference_mode()

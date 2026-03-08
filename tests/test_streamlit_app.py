@@ -5,13 +5,16 @@ import pytest
 import torch
 
 from streamlit_app import (
+    GUARDIAN_MODEL_ID,
     MODEL_ID,
     PROMPT_CHOICES,
     SUPPORTED_FORMATS,
     TASK_PRESETS,
+    check_safety,
     get_device,
     get_selected_tasks,
     load_and_preprocess_audio,
+    load_guardian_model,
     load_model,
     run_pipeline,
     transcribe_audio,
@@ -23,6 +26,11 @@ AUDIO_DIR = Path(__file__).parent / "data" / "audio"
 class TestModelId:
     def test_model_id(self) -> None:
         assert MODEL_ID == "ibm-granite/granite-4.0-1b-speech"
+
+
+class TestGuardianModelId:
+    def test_guardian_model_id(self) -> None:
+        assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-38m"
 
 
 class TestGetDevice:
@@ -184,6 +192,55 @@ class TestLoadModel:
         mock_model_cls.from_pretrained.assert_called_once_with(
             "test-model", device_map="cuda", torch_dtype=torch.bfloat16
         )
+
+
+class TestLoadGuardianModel:
+    @patch("streamlit_app.AutoModelForSequenceClassification")
+    @patch("streamlit_app.AutoTokenizer")
+    @patch("streamlit_app.st")
+    def test_loads_model_and_tokenizer(
+        self,
+        _mock_st: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        mock_model_cls: MagicMock,
+    ) -> None:
+        load_guardian_model.__wrapped__("test-model")  # type: ignore[attr-defined]
+        mock_tokenizer_cls.from_pretrained.assert_called_once_with("test-model")
+        mock_model_cls.from_pretrained.assert_called_once_with("test-model")
+
+
+class TestCheckSafety:
+    def _make_mocks(
+        self, logits_values: list[list[float]]
+    ) -> tuple[MagicMock, MagicMock]:
+        tokenizer = MagicMock()
+        tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
+        model = MagicMock()
+        model.return_value.logits = torch.tensor(logits_values)
+        return model, tokenizer
+
+    def test_safe_content(self) -> None:
+        model, tokenizer = self._make_mocks([[5.0, -5.0]])
+        is_toxic, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
+            "safe text", model, tokenizer
+        )
+        assert is_toxic is False
+        assert score < 0.5
+
+    def test_toxic_content(self) -> None:
+        model, tokenizer = self._make_mocks([[-5.0, 5.0]])
+        is_toxic, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
+            "toxic text", model, tokenizer
+        )
+        assert is_toxic is True
+        assert score > 0.5
+
+    def test_returns_rounded_score(self) -> None:
+        model, tokenizer = self._make_mocks([[0.0, 0.0]])
+        _, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
+            "text", model, tokenizer
+        )
+        assert score == 0.5
 
 
 class TestTranscribeAudio:

@@ -27,6 +27,19 @@ PROMPT_CHOICES = {
     "Mandarin Chinese": "translate the speech to Mandarin Chinese",
 }
 SUPPORTED_FORMATS = ["wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"]
+TASK_PRESETS: dict[str, list[str]] = {
+    "All Tasks": list(PROMPT_CHOICES.keys()),
+    "European Languages": [
+        "Transcribe",
+        "French",
+        "German",
+        "Spanish",
+        "Portuguese",
+        "Italian",
+    ],
+    "Asian Languages": ["Transcribe", "Japanese", "Mandarin Chinese"],
+    "Transcribe Only": ["Transcribe"],
+}
 
 
 def get_device() -> str:

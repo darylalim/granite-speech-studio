@@ -8,6 +8,7 @@ from streamlit_app import (
     MODEL_ID,
     PROMPT_CHOICES,
     SUPPORTED_FORMATS,
+    TASK_PRESETS,
     get_device,
     load_and_preprocess_audio,
     load_model,
@@ -73,6 +74,36 @@ class TestSupportedFormats:
     def test_all_formats_present(self) -> None:
         expected = {"wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"}
         assert set(SUPPORTED_FORMATS) == expected
+
+
+class TestTaskPresets:
+    def test_all_tasks_preset(self) -> None:
+        assert set(TASK_PRESETS["All Tasks"]) == set(PROMPT_CHOICES.keys())
+
+    def test_european_preset(self) -> None:
+        expected = {
+            "Transcribe",
+            "French",
+            "German",
+            "Spanish",
+            "Portuguese",
+            "Italian",
+        }
+        assert set(TASK_PRESETS["European Languages"]) == expected
+
+    def test_asian_preset(self) -> None:
+        expected = {"Transcribe", "Japanese", "Mandarin Chinese"}
+        assert set(TASK_PRESETS["Asian Languages"]) == expected
+
+    def test_transcribe_only_preset(self) -> None:
+        assert TASK_PRESETS["Transcribe Only"] == ["Transcribe"]
+
+    def test_all_preset_values_are_valid_prompt_keys(self) -> None:
+        for preset_name, tasks in TASK_PRESETS.items():
+            for task in tasks:
+                assert task in PROMPT_CHOICES, (
+                    f"{task} in preset '{preset_name}' not in PROMPT_CHOICES"
+                )
 
 
 class TestLoadAndPreprocessAudio:

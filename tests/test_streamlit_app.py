@@ -23,12 +23,10 @@ from streamlit_app import (
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
 
 
-class TestModelId:
+class TestModelIds:
     def test_model_id(self) -> None:
         assert MODEL_ID == "ibm-granite/granite-4.0-1b-speech"
 
-
-class TestGuardianModelId:
     def test_guardian_model_id(self) -> None:
         assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-38m"
 
@@ -204,9 +202,13 @@ class TestLoadGuardianModel:
         mock_tokenizer_cls: MagicMock,
         mock_model_cls: MagicMock,
     ) -> None:
-        load_guardian_model.__wrapped__("test-model")  # type: ignore[attr-defined]
+        result = load_guardian_model.__wrapped__("test-model")  # type: ignore[attr-defined]
         mock_tokenizer_cls.from_pretrained.assert_called_once_with("test-model")
         mock_model_cls.from_pretrained.assert_called_once_with("test-model")
+        assert result == (
+            mock_model_cls.from_pretrained.return_value,
+            mock_tokenizer_cls.from_pretrained.return_value,
+        )
 
 
 class TestCheckSafety:
@@ -235,12 +237,22 @@ class TestCheckSafety:
         assert is_toxic is True
         assert score > 0.5
 
-    def test_returns_rounded_score(self) -> None:
+    def test_boundary_is_not_toxic(self) -> None:
         model, tokenizer = self._make_mocks([[0.0, 0.0]])
-        _, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
+        is_toxic, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
             "text", model, tokenizer
         )
         assert score == 0.5
+        assert is_toxic is False
+
+    def test_tokenizer_called_with_correct_args(self) -> None:
+        model, tokenizer = self._make_mocks([[5.0, -5.0]])
+        check_safety.__wrapped__(  # type: ignore[attr-defined]
+            "hello world", model, tokenizer
+        )
+        tokenizer.assert_called_once_with(
+            ["hello world"], padding=True, truncation=True, return_tensors="pt"
+        )
 
 
 class TestTranscribeAudio:
@@ -397,3 +409,40 @@ class TestRunPipeline:
         assert "is_toxic" in result
         assert "toxicity_score" in result
         assert result["is_toxic"] is False
+
+    def test_toxic_content_flagged(self) -> None:
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
+        guardian_model.return_value.logits = torch.tensor([[-5.0, 5.0]])
+        wav = torch.zeros(1, 16000)
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            ["Transcribe"],
+            model,
+            processor,
+            "cpu",
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        result = results["Transcribe"]
+        assert result["is_toxic"] is True
+        assert result["toxicity_score"] > 0.5
+
+    def test_safety_check_receives_transcript(self) -> None:
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            ["Transcribe"],
+            model,
+            processor,
+            "cpu",
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        guardian_tokenizer.assert_called_once_with(
+            ["decoded text"], padding=True, truncation=True, return_tensors="pt"
+        )

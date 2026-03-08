@@ -15,16 +15,16 @@ warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
 )
 
-MODEL_ID = "ibm-granite/granite-speech-3.3-2b"
-SYSTEM_PROMPT_TEMPLATE = """Knowledge Cutoff Date: April 2024.
-Today's Date: {today}.
-You are Granite, developed by IBM. You are a helpful AI assistant"""
+MODEL_ID = "ibm-granite/granite-4.0-1b-speech"
 PROMPT_CHOICES = {
-    "Transcribe": "Transcribe the speech to text",
-    "French": "Translate the speech to French",
-    "German": "Translate the speech to German",
-    "Spanish": "Translate the speech to Spanish",
-    "Portuguese": "Translate the speech to Portuguese",
+    "Transcribe": "can you transcribe the speech into a written format?",
+    "French": "translate the speech to French",
+    "German": "translate the speech to German",
+    "Spanish": "translate the speech to Spanish",
+    "Portuguese": "translate the speech to Portuguese",
+    "Italian": "translate the speech to Italian",
+    "Japanese": "translate the speech to Japanese",
+    "Mandarin Chinese": "translate the speech to Mandarin Chinese",
 }
 SUPPORTED_FORMATS = ["wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"]
 
@@ -43,7 +43,7 @@ def load_model(
     processor = AutoProcessor.from_pretrained(model_id)
     dtype = torch.float32 if device == "cpu" else torch.bfloat16
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id, device_map=device, dtype=dtype
+        model_id, device_map=device, torch_dtype=dtype
     )
     return model, processor
 
@@ -71,20 +71,21 @@ def transcribe_audio(
     device: str,
 ) -> tuple[str, float]:
     start = time.perf_counter()
-    today = datetime.today().strftime("%B %d, %Y")
     tokenizer = processor.tokenizer
     chat = [
-        {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(today=today)},
         {"role": "user", "content": f"<|audio|>{prompt}"},
     ]
     text_prompt = tokenizer.apply_chat_template(
         chat, tokenize=False, add_generation_prompt=True
     )
     inputs = processor(text_prompt, wav, device=device, return_tensors="pt").to(device)
-    outputs = model.generate(**inputs, max_new_tokens=512, do_sample=False, num_beams=1)
-    transcript = tokenizer.decode(
-        outputs[0, inputs["input_ids"].shape[-1] :], skip_special_tokens=True
-    )
+    outputs = model.generate(**inputs, max_new_tokens=200, do_sample=False, num_beams=1)
+    num_input_tokens = inputs["input_ids"].shape[-1]
+    transcript = tokenizer.batch_decode(
+        outputs[:, num_input_tokens:],
+        add_special_tokens=False,
+        skip_special_tokens=True,
+    )[0]
     return transcript, round(time.perf_counter() - start, 2)
 
 

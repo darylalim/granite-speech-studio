@@ -107,6 +107,9 @@ class TestTaskPresets:
                     f"{task} in preset '{preset_name}' not in PROMPT_CHOICES"
                 )
 
+    def test_preset_count(self) -> None:
+        assert len(TASK_PRESETS) == 4
+
 
 class TestGetSelectedTasks:
     def test_preset_returns_preset_tasks(self) -> None:
@@ -275,3 +278,30 @@ class TestRunPipeline:
         )
 
         assert results == {}
+
+    def test_uses_correct_prompt_per_task(self) -> None:
+        model, processor = self._make_mocks()
+        tokenizer = processor.tokenizer
+        wav = torch.zeros(1, 16000)
+
+        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav, ["Transcribe", "French"], model, processor, "cpu"
+        )
+
+        calls = tokenizer.apply_chat_template.call_args_list
+        assert len(calls) == 2
+        first_chat = calls[0][0][0]
+        second_chat = calls[1][0][0]
+        assert PROMPT_CHOICES["Transcribe"] in first_chat[0]["content"]
+        assert PROMPT_CHOICES["French"] in second_chat[0]["content"]
+
+    def test_preserves_task_order(self) -> None:
+        model, processor = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+        tasks = ["Japanese", "Transcribe", "German"]
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav, tasks, model, processor, "cpu"
+        )
+
+        assert list(results.keys()) == tasks

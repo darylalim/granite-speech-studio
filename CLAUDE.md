@@ -77,6 +77,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 - `io.BytesIO` for in-memory audio loading (no temp files)
 - bfloat16 on MPS/CUDA, float32 on CPU
 - `time.perf_counter()` for timing
+- Guardian model runs on CPU with default dtype (38M params, fast inference)
 
 ### Error Handling
 

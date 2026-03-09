@@ -190,9 +190,6 @@ def main() -> None:
     with st.spinner(f"Loading model on {device.upper()}..."):
         model, processor = load_model(MODEL_ID, device)
 
-    with st.spinner("Loading safety model..."):
-        guardian_model, guardian_tokenizer = load_guardian_model(GUARDIAN_MODEL_ID)
-
     preset = st.pills(
         "Preset",
         options=list(TASK_PRESETS.keys()),
@@ -241,6 +238,14 @@ def main() -> None:
 
             def update_progress(i: int, total: int, task: str) -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
+
+            if ENGLISH_TASKS.intersection(tasks):
+                with st.spinner("Loading safety model..."):
+                    guardian_model, guardian_tokenizer = load_guardian_model(
+                        GUARDIAN_MODEL_ID
+                    )
+            else:
+                guardian_model, guardian_tokenizer = None, None
 
             pipeline_results = run_pipeline(
                 wav,

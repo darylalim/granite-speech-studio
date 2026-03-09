@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups. Includes toxicity detection via Granite Guardian HAP 38m.
+Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups. Includes English toxicity detection via Granite Guardian HAP 38m.
 
 ## Setup
 
@@ -50,7 +50,7 @@ uv run streamlit run streamlit_app.py
 ### Models
 
 - [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
-- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — toxicity detection (runs on CPU)
+- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection (runs on CPU)
 
 ### Languages
 
@@ -62,7 +62,7 @@ uv run streamlit run streamlit_app.py
 - **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
 - **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
 - **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) with per-task bordered containers
-- **Safety** — each result shows `st.success` (safe) or `st.warning` (toxic) banner with toxicity score
+- **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
 - **Footer** — model name, safety model name, device, links to model cards
 
 ### Audio Formats
@@ -87,7 +87,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 ### Downloads
 
 - **Per-task Text** — plain transcript as `.txt`
-- **Per-task JSON** — `model`, `task`, `audio_duration`, `transcript`, `num_words`, `eval_duration`, `is_toxic`, `toxicity_score`
+- **Per-task JSON** — `model`, `task`, `audio_duration`, `transcript`, `num_words`, `eval_duration`, plus `is_toxic` and `toxicity_score` for transcription only
 - **Combined JSON** — "Download All" with `model`, `audio_duration`, and all `results` keyed by task name
 
 `st.metric` displays audio duration, words, and processing time per task.

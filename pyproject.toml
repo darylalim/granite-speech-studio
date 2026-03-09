@@ -1,7 +1,7 @@
 [project]
 name = "granite-speech-pipeline"
 version = "0.3.0"
-description = "Speech-to-text and translation pipeline with toxicity detection using IBM Granite models"
+description = "Speech-to-text and translation pipeline with English toxicity detection using IBM Granite models"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.12.0",

@@ -1,17 +1,17 @@
 # Granite Speech Pipeline
 
-Streamlit web app for speech-to-text and translation using IBM's Granite Speech models. Process audio through multiple tasks simultaneously with preset task groups. Includes built-in toxicity detection via Granite Guardian.
+Streamlit web app for speech-to-text and translation using IBM's Granite Speech models. Process audio through multiple tasks simultaneously with preset task groups. Includes built-in English toxicity detection via Granite Guardian.
 
 ## Features
 
 - **Pipeline processing** — run multiple transcription and translation tasks on the same audio
-- **Safety** — automatic toxicity detection on all outputs via Granite Guardian HAP 38m
+- **Safety** — automatic toxicity detection on English transcriptions via Granite Guardian HAP 38m
 - **Presets** — All Tasks, European Languages (French, German, Spanish, Portuguese, Italian), Asian Languages (Japanese, Mandarin Chinese), Transcribe Only
 - **Custom selection** — pick individual tasks via multiselect
 - **Audio input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
 - **Metrics** — audio duration, word count, processing time per task
-- **Export** — download per-task text/JSON or combined JSON for all results (includes safety scores)
+- **Export** — download per-task text/JSON or combined JSON for all results (safety scores included for transcriptions)
 
 ## Hardware Support
 
@@ -47,7 +47,7 @@ uv run pytest                # Test
 ## Models
 
 - [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
-- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — toxicity detection
+- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection
 
 ## Resources
 

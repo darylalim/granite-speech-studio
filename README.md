@@ -10,6 +10,7 @@ Streamlit web app for speech-to-text and translation using IBM's Granite Speech 
 - **Custom selection** — pick individual tasks via multiselect
 - **Audio input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
+- **Deferred loading** — models load on first pipeline run for instant page startup
 - **Metrics** — audio duration, word count, processing time per task
 - **Export** — download per-task text/JSON or combined JSON for all results (safety scores included for transcriptions)
 

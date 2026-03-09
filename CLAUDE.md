@@ -61,7 +61,7 @@ uv run streamlit run streamlit_app.py
 
 - **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
 - **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
-- **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) with per-task bordered containers
+- **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
 - **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
 - **Footer** — model name, safety model name, device, links to model cards
 
@@ -72,6 +72,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 ### Performance
 
 - Best available device: MPS > CUDA > CPU
+- Deferred model loading — speech model loads on first pipeline run, not on page load
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on inference functions
 - `io.BytesIO` for in-memory audio loading (no temp files)
@@ -94,7 +95,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, safety checking, transcription, pipeline execution, and error handling.
+`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, safety checking, transcription, pipeline execution, result card rendering, and error handling.
 
 ## Resources
 

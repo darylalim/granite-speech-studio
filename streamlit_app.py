@@ -47,6 +47,7 @@ TASK_PRESETS: dict[str, list[str]] = {
     "Asian Languages": ["Transcribe", "Japanese", "Mandarin Chinese"],
     "Transcribe Only": ["Transcribe"],
 }
+ENGLISH_TASKS: set[str] = {"Transcribe"}
 
 
 def get_selected_tasks(preset: str | None, custom: list[str]) -> list[str]:
@@ -144,8 +145,8 @@ def run_pipeline(
     model: AutoModelForSpeechSeq2Seq,
     processor: AutoProcessor,
     device: str,
-    guardian_model: AutoModelForSequenceClassification,
-    guardian_tokenizer: AutoTokenizer,
+    guardian_model: AutoModelForSequenceClassification | None = None,
+    guardian_tokenizer: AutoTokenizer | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
@@ -156,16 +157,22 @@ def run_pipeline(
         transcript, eval_duration = transcribe_audio.__wrapped__(
             wav, prompt, model, processor, device
         )
-        is_toxic, toxicity_score = check_safety.__wrapped__(
-            transcript, guardian_model, guardian_tokenizer
-        )
-        results[task] = {
+        result: dict[str, object] = {
             "transcript": transcript,
             "num_words": len(transcript.split()),
             "eval_duration": eval_duration,
-            "is_toxic": is_toxic,
-            "toxicity_score": toxicity_score,
         }
+        if (
+            task in ENGLISH_TASKS
+            and guardian_model is not None
+            and guardian_tokenizer is not None
+        ):
+            is_toxic, toxicity_score = check_safety.__wrapped__(
+                transcript, guardian_model, guardian_tokenizer
+            )
+            result["is_toxic"] = is_toxic
+            result["toxicity_score"] = toxicity_score
+        results[task] = result
     return results
 
 
@@ -279,14 +286,15 @@ def main() -> None:
                         m_cols[0].metric("Duration", f"{audio_duration:.2f}s")
                         m_cols[1].metric("Words", result["num_words"])
                         m_cols[2].metric("Time", f"{result['eval_duration']}s")
-                        if result["is_toxic"]:
-                            st.warning(
-                                f"Toxic content detected (score: {result['toxicity_score']:.1%})"
-                            )
-                        else:
-                            st.success(
-                                f"Content is safe (score: {result['toxicity_score']:.1%})"
-                            )
+                        if "is_toxic" in result:
+                            if result["is_toxic"]:
+                                st.warning(
+                                    f"Toxic content detected (score: {result['toxicity_score']:.1%})"
+                                )
+                            else:
+                                st.success(
+                                    f"Content is safe (score: {result['toxicity_score']:.1%})"
+                                )
                         dl_cols = st.columns(2)
                         stem = st.session_state.result_filename.replace(
                             "_pipeline.json", ""

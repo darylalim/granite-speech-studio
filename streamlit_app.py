@@ -69,7 +69,7 @@ def load_model(
     processor = AutoProcessor.from_pretrained(model_id)
     dtype = torch.float32 if device == "cpu" else torch.bfloat16
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id, device_map=device, torch_dtype=dtype
+        model_id, device_map=device, dtype=dtype
     )
     return model, processor
 

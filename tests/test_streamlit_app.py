@@ -174,7 +174,7 @@ class TestLoadModel:
     ) -> None:
         load_model.__wrapped__("test-model", "cpu")  # type: ignore[attr-defined]
         mock_model_cls.from_pretrained.assert_called_once_with(
-            "test-model", device_map="cpu", torch_dtype=torch.float32
+            "test-model", device_map="cpu", dtype=torch.float32
         )
 
     @patch("streamlit_app.AutoProcessor")
@@ -188,7 +188,7 @@ class TestLoadModel:
     ) -> None:
         load_model.__wrapped__("test-model", "cuda")  # type: ignore[attr-defined]
         mock_model_cls.from_pretrained.assert_called_once_with(
-            "test-model", device_map="cuda", torch_dtype=torch.bfloat16
+            "test-model", device_map="cuda", dtype=torch.bfloat16
         )
 
 

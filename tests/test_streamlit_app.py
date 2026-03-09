@@ -446,3 +446,35 @@ class TestRunPipeline:
         guardian_tokenizer.assert_called_once_with(
             ["decoded text"], padding=True, truncation=True, return_tensors="pt"
         )
+
+    def test_translation_tasks_skip_safety_check(self) -> None:
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav, ["French"], model, processor, "cpu", guardian_model, guardian_tokenizer
+        )
+
+        result = results["French"]
+        assert "is_toxic" not in result
+        assert "toxicity_score" not in result
+        guardian_tokenizer.assert_not_called()
+
+    def test_mixed_tasks_safety_only_on_transcribe(self) -> None:
+        model, processor, guardian_model, guardian_tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            ["Transcribe", "French"],
+            model,
+            processor,
+            "cpu",
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        assert "is_toxic" in results["Transcribe"]
+        assert "toxicity_score" in results["Transcribe"]
+        assert "is_toxic" not in results["French"]
+        assert "toxicity_score" not in results["French"]

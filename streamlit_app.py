@@ -176,6 +176,51 @@ def run_pipeline(
     return results
 
 
+def _render_result_card(
+    task_name: str,
+    result: dict[str, object],
+    audio_duration: float,
+    stem: str,
+) -> None:
+    with st.container(border=True):
+        st.subheader(task_name)
+        st.code(result["transcript"], language=None)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Duration", f"{audio_duration:.2f}s")
+        m2.metric("Words", result["num_words"])
+        m3.metric("Time", f"{result['eval_duration']}s")
+        if "is_toxic" in result:
+            score = f"score: {result['toxicity_score']:.1%}"
+            if result["is_toxic"]:
+                st.warning(f"Toxic content detected ({score})")
+            else:
+                st.success(f"Content is safe ({score})")
+        slug = task_name.lower().replace(" ", "_")
+        d1, d2 = st.columns(2)
+        d1.download_button(
+            "Text",
+            result["transcript"],
+            f"{stem}_{slug}.txt",
+            "text/plain",
+            key=f"dl_txt_{task_name}",
+        )
+        d2.download_button(
+            "JSON",
+            json.dumps(
+                {
+                    "model": MODEL_ID,
+                    "task": task_name,
+                    "audio_duration": audio_duration,
+                    **result,
+                },
+                indent=2,
+            ),
+            f"{stem}_{slug}.json",
+            "application/json",
+            key=f"dl_json_{task_name}",
+        )
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Granite Speech Pipeline",
@@ -186,9 +231,6 @@ def main() -> None:
     device = get_device()
 
     st.title("\U0001f399\ufe0f Granite Speech Pipeline")
-
-    with st.spinner(f"Loading model on {device.upper()}..."):
-        model, processor = load_model(MODEL_ID, device)
 
     preset = st.pills(
         "Preset",
@@ -219,21 +261,21 @@ def main() -> None:
 
     input_key = (audio_file.name, audio_file.size, tuple(tasks)) if audio_file else None
     if input_key != st.session_state.get("_last_input_key"):
-        st.session_state.pop("results", None)
-        st.session_state.pop("result_filename", None)
-        st.session_state.pop("audio_duration", None)
+        for key in ("results", "result_filename", "audio_duration"):
+            st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 
     if audio_file:
         st.audio(audio_file)
-        caption = "Recorded audio" if recorded else audio_file.name
-        st.caption(caption)
+        st.caption("Recorded audio" if recorded else audio_file.name)
 
     can_run = audio_file is not None and len(tasks) > 0
 
     if st.button("Run Pipeline", type="primary", disabled=not can_run) and can_run:
         progress = st.progress(0, text="Starting pipeline...")
         try:
+            with st.spinner(f"Loading model on {device.upper()}..."):
+                model, processor = load_model(MODEL_ID, device)
             wav, audio_duration = load_and_preprocess_audio(audio_file)
 
             def update_progress(i: int, total: int, task: str) -> None:
@@ -275,6 +317,7 @@ def main() -> None:
     if "results" in st.session_state:
         results = st.session_state.results
         audio_duration = st.session_state.audio_duration
+        stem = st.session_state.result_filename.replace("_pipeline.json", "")
         task_names = list(results.keys())
 
         num_cols = min(len(task_names), 3)
@@ -282,59 +325,21 @@ def main() -> None:
             row_tasks = task_names[row_start : row_start + num_cols]
             cols = st.columns(num_cols)
             for col, task_name in zip(cols, row_tasks):
-                result = results[task_name]
                 with col:
-                    with st.container(border=True):
-                        st.subheader(task_name)
-                        st.code(result["transcript"], language=None)
-                        m_cols = st.columns(3)
-                        m_cols[0].metric("Duration", f"{audio_duration:.2f}s")
-                        m_cols[1].metric("Words", result["num_words"])
-                        m_cols[2].metric("Time", f"{result['eval_duration']}s")
-                        if "is_toxic" in result:
-                            if result["is_toxic"]:
-                                st.warning(
-                                    f"Toxic content detected (score: {result['toxicity_score']:.1%})"
-                                )
-                            else:
-                                st.success(
-                                    f"Content is safe (score: {result['toxicity_score']:.1%})"
-                                )
-                        dl_cols = st.columns(2)
-                        stem = st.session_state.result_filename.replace(
-                            "_pipeline.json", ""
-                        )
-                        dl_cols[0].download_button(
-                            "Text",
-                            result["transcript"],
-                            f"{stem}_{task_name.lower().replace(' ', '_')}.txt",
-                            "text/plain",
-                            key=f"dl_txt_{task_name}",
-                        )
-                        dl_cols[1].download_button(
-                            "JSON",
-                            json.dumps(
-                                {
-                                    "model": MODEL_ID,
-                                    "task": task_name,
-                                    "audio_duration": audio_duration,
-                                    **result,
-                                },
-                                indent=2,
-                            ),
-                            f"{stem}_{task_name.lower().replace(' ', '_')}.json",
-                            "application/json",
-                            key=f"dl_json_{task_name}",
-                        )
+                    _render_result_card(
+                        task_name, results[task_name], audio_duration, stem
+                    )
 
-        combined = {
-            "model": MODEL_ID,
-            "audio_duration": audio_duration,
-            "results": results,
-        }
         st.download_button(
             "Download All (JSON)",
-            json.dumps(combined, indent=2),
+            json.dumps(
+                {
+                    "model": MODEL_ID,
+                    "audio_duration": audio_duration,
+                    "results": results,
+                },
+                indent=2,
+            ),
             st.session_state.result_filename,
             "application/json",
         )

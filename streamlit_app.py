@@ -105,6 +105,13 @@ def load_punctuation_model(model_id: str) -> PunctCapSegModelONNX:
     return PunctCapSegModelONNX.from_pretrained(model_id)
 
 
+def apply_punctuation(text: str, model: PunctCapSegModelONNX) -> str:
+    result = model.infer([text])
+    output = " ".join(result[0])
+    output = output.replace("<unk>", " ").replace("<Unk>", " ")
+    return " ".join(output.split()).strip()
+
+
 @torch.inference_mode()
 def check_safety(
     text: str,

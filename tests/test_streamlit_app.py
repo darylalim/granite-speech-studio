@@ -14,6 +14,7 @@ from streamlit_app import (
     SUPPORTED_FORMATS,
     TASK_PRESETS,
     _render_result_card,
+    apply_punctuation,
     check_safety,
     get_device,
     get_selected_tasks,
@@ -230,6 +231,33 @@ class TestLoadPunctuationModel:
         result = load_punctuation_model.__wrapped__("pcs_en")  # type: ignore[attr-defined]
         mock_model_cls.from_pretrained.assert_called_once_with("pcs_en")
         assert result == mock_model_cls.from_pretrained.return_value
+
+
+class TestApplyPunctuation:
+    def test_calls_infer_with_list(self) -> None:
+        model = MagicMock()
+        model.infer.return_value = [["Hello world."]]
+        result = apply_punctuation("hello world", model)
+        model.infer.assert_called_once_with(["hello world"])
+        assert result == "Hello world."
+
+    def test_joins_multiple_sentences(self) -> None:
+        model = MagicMock()
+        model.infer.return_value = [["Hello.", "How are you?"]]
+        result = apply_punctuation("hello how are you", model)
+        assert result == "Hello. How are you?"
+
+    def test_cleans_unk_tokens(self) -> None:
+        model = MagicMock()
+        model.infer.return_value = [["Hello <unk> world <Unk> test."]]
+        result = apply_punctuation("hello world test", model)
+        assert result == "Hello world test."
+
+    def test_empty_string(self) -> None:
+        model = MagicMock()
+        model.infer.return_value = [[""]]
+        result = apply_punctuation("", model)
+        assert result == ""
 
 
 class TestCheckSafety:

@@ -1,10 +1,9 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-
-import json
 
 from streamlit_app import (
     GUARDIAN_MODEL_ID,

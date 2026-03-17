@@ -354,7 +354,9 @@ class TestTranscribeAudio:
 
 
 class TestRunPipeline:
-    def _make_mocks(self) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
+    def _make_mocks(
+        self,
+    ) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
         tokenizer = MagicMock()
         tokenizer.apply_chat_template.return_value = "formatted"
         tokenizer.batch_decode.return_value = ["decoded text"]
@@ -531,7 +533,9 @@ class TestRunPipeline:
         assert "toxicity_score" not in results["French"]
 
     def test_punctuation_applied_to_english(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer, punct_model = (
+            self._make_mocks()
+        )
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
@@ -549,7 +553,9 @@ class TestRunPipeline:
         assert results["Transcribe"]["transcript"] == "Decoded text."
 
     def test_punctuation_skipped_for_translation(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer, punct_model = (
+            self._make_mocks()
+        )
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
@@ -567,7 +573,9 @@ class TestRunPipeline:
         assert results["French"]["transcript"] == "decoded text"
 
     def test_punctuation_before_safety_check(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
+        model, processor, guardian_model, guardian_tokenizer, punct_model = (
+            self._make_mocks()
+        )
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]

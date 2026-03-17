@@ -161,6 +161,7 @@ def run_pipeline(
     device: str,
     guardian_model: AutoModelForSequenceClassification | None = None,
     guardian_tokenizer: AutoTokenizer | None = None,
+    punct_model: PunctCapSegModelONNX | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, dict[str, object]]:
     results: dict[str, dict[str, object]] = {}
@@ -171,6 +172,8 @@ def run_pipeline(
         transcript, eval_duration = transcribe_audio.__wrapped__(
             wav, prompt, model, processor, device
         )
+        if task in ENGLISH_TASKS and punct_model is not None:
+            transcript = apply_punctuation(transcript, punct_model)
         result: dict[str, object] = {
             "transcript": transcript,
             "num_words": len(transcript.split()),

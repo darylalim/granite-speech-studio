@@ -34,8 +34,8 @@ uv run streamlit run streamlit_app.py
 - `torch` — tensor operations
 - `torchaudio` — audio loading and resampling
 - `torchcodec` — audio decoding backend for torchaudio
-- `streamlit` — web user interface
 - `punctuators` — English punctuation and capitalization (ONNX)
+- `streamlit` — web user interface
 - `ruff` — linting/formatting (dev)
 - `ty` — type checking (dev)
 - `pytest` — testing (dev)

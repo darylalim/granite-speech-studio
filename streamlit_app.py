@@ -9,6 +9,7 @@ from pathlib import Path
 import streamlit as st
 import torch
 import torchaudio
+from punctuators.models import PunctCapSegModelONNX
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from transformers import (
     AutoModelForSequenceClassification,
@@ -23,6 +24,7 @@ warnings.filterwarnings(
 
 MODEL_ID = "ibm-granite/granite-4.0-1b-speech"
 GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-38m"
+PUNCTUATION_MODEL_ID = "pcs_en"
 PROMPT_CHOICES = {
     "Transcribe": "can you transcribe the speech into a written format?",
     "French": "translate the speech to French",
@@ -96,6 +98,11 @@ def load_guardian_model(
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForSequenceClassification.from_pretrained(model_id)
     return model, tokenizer
+
+
+@st.cache_resource(show_spinner=False)
+def load_punctuation_model(model_id: str) -> PunctCapSegModelONNX:
+    return PunctCapSegModelONNX.from_pretrained(model_id)
 
 
 @torch.inference_mode()

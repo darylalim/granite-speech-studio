@@ -9,6 +9,7 @@ import json
 from streamlit_app import (
     GUARDIAN_MODEL_ID,
     MODEL_ID,
+    PUNCTUATION_MODEL_ID,
     PROMPT_CHOICES,
     SUPPORTED_FORMATS,
     TASK_PRESETS,
@@ -18,6 +19,7 @@ from streamlit_app import (
     get_selected_tasks,
     load_and_preprocess_audio,
     load_guardian_model,
+    load_punctuation_model,
     load_model,
     run_pipeline,
     transcribe_audio,
@@ -32,6 +34,9 @@ class TestModelIds:
 
     def test_guardian_model_id(self) -> None:
         assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-38m"
+
+    def test_punctuation_model_id(self) -> None:
+        assert PUNCTUATION_MODEL_ID == "pcs_en"
 
 
 class TestGetDevice:
@@ -212,6 +217,19 @@ class TestLoadGuardianModel:
             mock_model_cls.from_pretrained.return_value,
             mock_tokenizer_cls.from_pretrained.return_value,
         )
+
+
+class TestLoadPunctuationModel:
+    @patch("streamlit_app.PunctCapSegModelONNX")
+    @patch("streamlit_app.st")
+    def test_loads_model(
+        self,
+        _mock_st: MagicMock,
+        mock_model_cls: MagicMock,
+    ) -> None:
+        result = load_punctuation_model.__wrapped__("pcs_en")  # type: ignore[attr-defined]
+        mock_model_cls.from_pretrained.assert_called_once_with("pcs_en")
+        assert result == mock_model_cls.from_pretrained.return_value
 
 
 class TestCheckSafety:

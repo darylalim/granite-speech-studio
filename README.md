@@ -1,10 +1,11 @@
 # Granite Speech Pipeline
 
-Streamlit web app for speech-to-text and translation using IBM's Granite Speech models. Process audio through multiple tasks simultaneously with preset task groups. Includes built-in English toxicity detection via Granite Guardian.
+Streamlit web app for speech-to-text and translation using IBM's Granite Speech models. Process audio through multiple tasks simultaneously with preset task groups. Includes automatic punctuation/capitalization and English toxicity detection.
 
 ## Features
 
 - **Pipeline processing** — run multiple transcription and translation tasks on the same audio
+- **Punctuation** — automatic capitalization and punctuation on English transcriptions
 - **Safety** — automatic toxicity detection on English transcriptions via Granite Guardian HAP 38m
 - **Presets** — All Tasks, European Languages (French, German, Spanish, Portuguese, Italian), Asian Languages (Japanese, Mandarin Chinese), Transcribe Only
 - **Custom selection** — pick individual tasks via multiselect
@@ -48,6 +49,7 @@ uv run pytest                # Test
 ## Models
 
 - [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
+- pcs_en (via [punctuators](https://pypi.org/project/punctuators/)) — English punctuation and capitalization
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection
 
 ## Resources

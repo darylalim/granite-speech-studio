@@ -299,11 +299,14 @@ def main() -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
 
             if ENGLISH_TASKS.intersection(tasks):
+                with st.spinner("Loading punctuation model..."):
+                    punct_model = load_punctuation_model(PUNCTUATION_MODEL_ID)
                 with st.spinner("Loading safety model..."):
                     guardian_model, guardian_tokenizer = load_guardian_model(
                         GUARDIAN_MODEL_ID
                     )
             else:
+                punct_model = None
                 guardian_model, guardian_tokenizer = None, None
 
             pipeline_results = run_pipeline(
@@ -314,6 +317,7 @@ def main() -> None:
                 device,
                 guardian_model,
                 guardian_tokenizer,
+                punct_model,
                 on_progress=update_progress,
             )
             progress.progress(1.0, text="Done!")
@@ -363,6 +367,7 @@ def main() -> None:
 
     st.caption(
         f"Model: {MODEL_ID.split('/')[-1]} | "
+        f"Punctuation: {PUNCTUATION_MODEL_ID} | "
         f"Safety: {GUARDIAN_MODEL_ID.split('/')[-1]} | "
         f"Device: {device.upper()} | "
         f"[Model Card](https://huggingface.co/{MODEL_ID}) | "

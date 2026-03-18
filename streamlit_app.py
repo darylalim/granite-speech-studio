@@ -358,7 +358,13 @@ def main() -> None:
 
     audio_file = recorded or uploaded
 
-    input_key = (audio_file.name, audio_file.size, tuple(tasks)) if audio_file else None
+    use_segmentation = st.checkbox("VAD segmentation", value=True)
+
+    input_key = (
+        (audio_file.name, audio_file.size, tuple(tasks), use_segmentation)
+        if audio_file
+        else None
+    )
     if input_key != st.session_state.get("_last_input_key"):
         for key in ("results", "result_filename", "audio_duration"):
             st.session_state.pop(key, None)
@@ -376,6 +382,12 @@ def main() -> None:
             with st.spinner(f"Loading model on {device.upper()}..."):
                 model, processor = load_model(MODEL_ID, device)
             wav, audio_duration = load_and_preprocess_audio(audio_file)
+
+            if use_segmentation:
+                with st.spinner("Loading VAD model..."):
+                    vad_model = load_vad_model()
+            else:
+                vad_model = None
 
             def update_progress(i: int, total: int, task: str) -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
@@ -401,6 +413,8 @@ def main() -> None:
                 guardian_tokenizer,
                 punct_model,
                 on_progress=update_progress,
+                vad_model=vad_model,
+                use_segmentation=use_segmentation,
             )
             progress.progress(1.0, text="Done!")
             st.session_state.results = pipeline_results

@@ -27,14 +27,15 @@ Runs on CPU. Loaded in `main()` before pipeline execution when the segmentation 
 
 ## Segmentation Functions
 
-### `silero_vad(wav, sample_rate) -> list[tuple[float, float]]`
+### `silero_vad(wav, model, sample_rate) -> list[tuple[float, float]]`
 
-Runs Silero VAD on a waveform tensor. Returns a list of `(start, end)` tuples in seconds.
+Runs Silero VAD on a waveform tensor. Takes the loaded VAD model as a parameter (consistent with how `transcribe_audio` and `check_safety` receive their models). Returns a list of `(start, end)` tuples in seconds.
 
-### `get_speech_segments(wav, sample_rate) -> list[dict]`
+### `get_speech_segments(wav, model, sample_rate) -> list[dict]`
 
-Post-processes VAD output:
-- Adds 0.3s start buffer to catch cut-off word beginnings
+Post-processes VAD output. Takes the loaded VAD model as a parameter (passes it through to `silero_vad`):
+- Adds 0.3s start buffer and 0.3s end buffer to catch cut-off word beginnings and trailing syllables
+- Clamps end buffer to audio duration
 - Merges segments with gaps < 0.5s to avoid over-fragmentation
 - Falls back to a single segment covering the full audio if no speech detected
 - Returns `list[dict]` with `{"start": float, "end": float}`
@@ -58,8 +59,9 @@ Formats seconds to `M:SS` or `H:MM:SS` (e.g., `0:15`, `1:02:30`).
    - If English task, punctuate the segment text via existing `apply_punctuation()`
    - Prepend timestamp: `[0:00 - 0:15] Punctuated text.`
 3. Join all segment lines with `\n` to form the full transcript
-4. If English task, run safety check once on the joined text without timestamps
-5. `num_words` counts words across all segments (excluding timestamps)
+4. If English task, run safety check once on the joined text without timestamps (guardian tokenizer uses `truncation=True`, so very long transcripts will be truncated — acceptable since toxicity in early content is still caught, consistent with existing non-segmented behavior)
+5. `num_words` is summed from per-segment word counts (counted before timestamps are prepended, avoiding timestamp tokens in the count)
+6. `eval_duration` is the sum of all per-segment transcription times
 
 Segment boundaries are computed once and reused across all tasks.
 
@@ -93,14 +95,27 @@ Add `use_segmentation` to the `input_key` tuple so changing the toggle clears st
 
 ## Dependencies
 
-Add `silero-vad` to `pyproject.toml`. Only depends on torch (already a dependency).
+Add `silero-vad` to `pyproject.toml`. This is the PyPI package that bundles the Silero VAD model (avoids runtime downloads via `torch.hub`). Only depends on torch (already a dependency). The `load_silero_vad()` function is imported from `silero_vad`.
+
+## Inference Mode
+
+`silero_vad()` and `get_speech_segments()` do not need `@torch.inference_mode()` — Silero VAD manages its own inference context internally. When called from within `run_pipeline()` (which has the decorator), VAD runs inside the existing inference mode context. When called from tests via `__wrapped__` (bypassing the decorator), VAD still works correctly since it handles its own context.
+
+## CLAUDE.md Updates
+
+After implementation, update CLAUDE.md:
+- Add `silero-vad` to Dependencies section
+- Add Silero VAD to Models section
+- Add `silero_vad`, `get_speech_segments`, `format_timestamp` to Architecture notes
+- Update Performance section to note VAD runs on CPU
+- Update Tests section to list new test classes
 
 ## Testing
 
 New test classes:
 - `TestLoadVadModel` — cached loader calls `load_silero_vad()`
 - `TestSileroVad` — mock Silero model, verify `(start, end)` tuples in seconds
-- `TestGetSpeechSegments` — start buffering, gap merging, no-speech fallback
+- `TestGetSpeechSegments` — start buffering, end buffering, end buffer clamping, gap merging, no-speech fallback
 - `TestFormatTimestamp` — seconds to `M:SS` / `H:MM:SS` formatting
 
 New cases in `TestRunPipeline`:
@@ -110,7 +125,7 @@ New cases in `TestRunPipeline`:
 - Pipeline unchanged when `use_segmentation=False`
 - Pipeline unchanged when `vad_model=None`
 
-All tests use mocks (no real Silero model downloads).
+All tests use mocks (no real Silero model downloads). `TestLoadVadModel` mocks the `silero_vad` module's `load_silero_vad` function (different from the HuggingFace `from_pretrained` pattern used by other loaders).
 
 ## What Stays the Same
 

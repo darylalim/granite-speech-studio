@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups. Includes automatic punctuation/capitalization and English toxicity detection.
+Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups. Includes VAD-based audio segmentation, automatic punctuation/capitalization, and English toxicity detection.
 
 ## Setup
 
@@ -35,6 +35,7 @@ uv run streamlit run streamlit_app.py
 - `torchaudio` — audio loading and resampling
 - `torchcodec` — audio decoding backend for torchaudio
 - `punctuators` — English punctuation and capitalization (ONNX)
+- `silero-vad` — Voice Activity Detection for audio segmentation
 - `streamlit` — web user interface
 - `ruff` — linting/formatting (dev)
 - `ty` — type checking (dev)
@@ -48,11 +49,20 @@ uv run streamlit run streamlit_app.py
 
 `streamlit_app.py` — single-file app.
 
+### Functions
+
+- `format_timestamp` — formats seconds to `M:SS` or `H:MM:SS`
+- `silero_vad` — runs Silero VAD on waveform, returns `(start, end)` tuples in seconds
+- `get_speech_segments` — post-processes VAD output with buffering and merging
+- `load_vad_model` — cached Silero VAD model loader
+- Pipeline supports optional VAD segmentation with per-segment transcription and timestamped output
+
 ### Models
 
 - [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection (runs on CPU)
 - pcs_en (via `punctuators`) — English punctuation and capitalization (runs on CPU, ONNX)
+- [Silero VAD](https://github.com/snakers4/silero-vad) — Voice Activity Detection for speech segmentation (runs on CPU)
 
 ### Languages
 
@@ -63,6 +73,7 @@ uv run streamlit run streamlit_app.py
 
 - **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
 - **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
+- **Segmentation** — `st.checkbox` for VAD segmentation toggle (default on)
 - **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
 - **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
 - **Footer** — model name, punctuation model name, safety model name, device, links to model cards
@@ -82,6 +93,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 - `time.perf_counter()` for timing
 - Guardian model runs on CPU with default dtype (38M params, fast inference)
 - Punctuation model runs on CPU via ONNX Runtime (no `@torch.inference_mode()`)
+- Silero VAD model runs on CPU (~3MB)
 
 ### Error Handling
 
@@ -98,7 +110,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, punctuation model loading, punctuation application, safety checking, transcription, pipeline execution, result card rendering, and error handling.
+`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, punctuation model loading, punctuation application, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`, plus new segmentation cases in `TestRunPipeline`.
 
 ## Resources
 

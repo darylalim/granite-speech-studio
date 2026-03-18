@@ -10,7 +10,7 @@ import streamlit as st
 import torch
 import torchaudio
 from punctuators.models import PunctCapSegModelONNX
-from silero_vad import get_speech_timestamps
+from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from transformers import (
     AutoModelForSequenceClassification,
@@ -146,6 +146,11 @@ def load_guardian_model(
 @st.cache_resource(show_spinner=False)
 def load_punctuation_model(model_id: str) -> PunctCapSegModelONNX:
     return PunctCapSegModelONNX.from_pretrained(model_id)
+
+
+@st.cache_resource(show_spinner=False)
+def load_vad_model() -> torch.nn.Module:
+    return load_silero_vad()
 
 
 def apply_punctuation(text: str, model: PunctCapSegModelONNX) -> str:

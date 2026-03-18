@@ -23,6 +23,7 @@ from streamlit_app import (
     load_guardian_model,
     load_punctuation_model,
     load_model,
+    load_vad_model,
     run_pipeline,
     silero_vad,
     transcribe_audio,
@@ -335,6 +336,19 @@ class TestLoadPunctuationModel:
         result = load_punctuation_model.__wrapped__("pcs_en")  # type: ignore[attr-defined]
         mock_model_cls.from_pretrained.assert_called_once_with("pcs_en")
         assert result == mock_model_cls.from_pretrained.return_value
+
+
+class TestLoadVadModel:
+    @patch("streamlit_app.load_silero_vad")
+    @patch("streamlit_app.st")
+    def test_loads_model(
+        self,
+        _mock_st: MagicMock,
+        mock_load: MagicMock,
+    ) -> None:
+        result = load_vad_model.__wrapped__()  # type: ignore[attr-defined]
+        mock_load.assert_called_once()
+        assert result == mock_load.return_value
 
 
 class TestApplyPunctuation:

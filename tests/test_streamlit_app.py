@@ -754,7 +754,7 @@ class TestRunPipeline:
         assert "[0:01 - 0:03]" in transcript
         assert "\n" in transcript
 
-    def test_segmented_eval_duration_is_sum(self) -> None:
+    def test_segmented_eval_duration_is_rounded_float(self) -> None:
         model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
@@ -775,7 +775,9 @@ class TestRunPipeline:
                 True,
             )
 
-        assert results["Transcribe"]["eval_duration"] > 0
+        duration = results["Transcribe"]["eval_duration"]
+        assert isinstance(duration, float)
+        assert duration >= 0
 
     def test_segmented_num_words_excludes_timestamps(self) -> None:
         model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()

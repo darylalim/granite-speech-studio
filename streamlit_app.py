@@ -239,7 +239,7 @@ def run_pipeline(
                 ts_end = format_timestamp(seg["end"])
                 segment_texts.append(f"[{ts_start} - {ts_end}] {seg_transcript}")
             transcript = "\n".join(segment_texts)
-            eval_duration = time.perf_counter() - seg_start_time
+            eval_duration = round(time.perf_counter() - seg_start_time, 2)
             num_words = total_words
         else:
             transcript, eval_duration = transcribe_audio.__wrapped__(

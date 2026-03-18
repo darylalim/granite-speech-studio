@@ -211,20 +211,46 @@ def run_pipeline(
     guardian_tokenizer: AutoTokenizer | None = None,
     punct_model: PunctCapSegModelONNX | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    vad_model: torch.nn.Module | None = None,
+    use_segmentation: bool = False,
 ) -> dict[str, dict[str, object]]:
+    segmented = use_segmentation and vad_model is not None
+    segments = get_speech_segments(wav, vad_model) if segmented else None
     results: dict[str, dict[str, object]] = {}
     for i, task in enumerate(tasks):
         if on_progress:
             on_progress(i, len(tasks), task)
         prompt = PROMPT_CHOICES[task]
-        transcript, eval_duration = transcribe_audio.__wrapped__(
-            wav, prompt, model, processor, device
-        )
-        if task in ENGLISH_TASKS and punct_model is not None:
-            transcript = apply_punctuation(transcript, punct_model)
+        if segmented and segments:
+            segment_texts: list[str] = []
+            total_words = 0
+            seg_start_time = time.perf_counter()
+            for seg in segments:
+                start_sample = int(seg["start"] * 16000)
+                end_sample = int(seg["end"] * 16000)
+                wav_segment = wav[:, start_sample:end_sample]
+                seg_transcript, _ = transcribe_audio.__wrapped__(
+                    wav_segment, prompt, model, processor, device
+                )
+                if task in ENGLISH_TASKS and punct_model is not None:
+                    seg_transcript = apply_punctuation(seg_transcript, punct_model)
+                total_words += len(seg_transcript.split())
+                ts_start = format_timestamp(seg["start"])
+                ts_end = format_timestamp(seg["end"])
+                segment_texts.append(f"[{ts_start} - {ts_end}] {seg_transcript}")
+            transcript = "\n".join(segment_texts)
+            eval_duration = time.perf_counter() - seg_start_time
+            num_words = total_words
+        else:
+            transcript, eval_duration = transcribe_audio.__wrapped__(
+                wav, prompt, model, processor, device
+            )
+            if task in ENGLISH_TASKS and punct_model is not None:
+                transcript = apply_punctuation(transcript, punct_model)
+            num_words = len(transcript.split())
         result: dict[str, object] = {
             "transcript": transcript,
-            "num_words": len(transcript.split()),
+            "num_words": num_words,
             "eval_duration": eval_duration,
         }
         if (
@@ -232,8 +258,16 @@ def run_pipeline(
             and guardian_model is not None
             and guardian_tokenizer is not None
         ):
+            if segmented and segments:
+                safety_text = " ".join(
+                    seg_transcript
+                    for line in segment_texts
+                    for seg_transcript in [line.split("] ", 1)[1]]
+                )
+            else:
+                safety_text = transcript
             is_toxic, toxicity_score = check_safety.__wrapped__(
-                transcript, guardian_model, guardian_tokenizer
+                safety_text, guardian_model, guardian_tokenizer
             )
             result["is_toxic"] = is_toxic
             result["toxicity_score"] = toxicity_score

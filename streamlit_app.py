@@ -10,6 +10,7 @@ import streamlit as st
 import torch
 import torchaudio
 from punctuators.models import PunctCapSegModelONNX
+from silero_vad import get_speech_timestamps
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from transformers import (
     AutoModelForSequenceClassification,
@@ -50,6 +51,48 @@ TASK_PRESETS: dict[str, list[str]] = {
     "Transcribe Only": ["Transcribe"],
 }
 ENGLISH_TASKS: set[str] = {"Transcribe"}
+
+
+def format_timestamp(seconds: float) -> str:
+    mins, secs = divmod(int(seconds), 60)
+    hours, mins = divmod(mins, 60)
+    if hours > 0:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins}:{secs:02d}"
+
+
+def silero_vad(
+    wav: torch.Tensor, model: torch.nn.Module, sample_rate: int = 16000
+) -> list[tuple[float, float]]:
+    speech_timestamps = get_speech_timestamps(
+        wav.squeeze(), model, sampling_rate=sample_rate
+    )
+    return [
+        (ts["start"] / sample_rate, ts["end"] / sample_rate) for ts in speech_timestamps
+    ]
+
+
+def get_speech_segments(
+    wav: torch.Tensor,
+    model: torch.nn.Module,
+    sample_rate: int = 16000,
+) -> list[dict[str, float]]:
+    duration = wav.shape[-1] / sample_rate
+    vad_segments = silero_vad(wav, model, sample_rate)
+    if not vad_segments:
+        return [{"start": 0.0, "end": duration}]
+    start_buffer = 0.3
+    end_buffer = 0.3
+    min_gap = 0.5
+    segments: list[dict[str, float]] = []
+    for start, end in vad_segments:
+        buffered_start = max(0.0, start - start_buffer)
+        buffered_end = min(duration, end + end_buffer)
+        if segments and buffered_start - segments[-1]["end"] < min_gap:
+            segments[-1]["end"] = max(segments[-1]["end"], buffered_end)
+        else:
+            segments.append({"start": buffered_start, "end": buffered_end})
+    return segments
 
 
 def get_selected_tasks(preset: str | None, custom: list[str]) -> list[str]:

@@ -15,13 +15,16 @@ from streamlit_app import (
     _render_result_card,
     apply_punctuation,
     check_safety,
+    format_timestamp,
     get_device,
     get_selected_tasks,
+    get_speech_segments,
     load_and_preprocess_audio,
     load_guardian_model,
     load_punctuation_model,
     load_model,
     run_pipeline,
+    silero_vad,
     transcribe_audio,
 )
 
@@ -141,6 +144,108 @@ class TestGetSelectedTasks:
     def test_none_preset_empty_custom_returns_empty(self) -> None:
         result = get_selected_tasks(None, [])
         assert result == []
+
+
+class TestFormatTimestamp:
+    def test_zero_seconds(self) -> None:
+        assert format_timestamp(0.0) == "0:00"
+
+    def test_seconds_only(self) -> None:
+        assert format_timestamp(15.0) == "0:15"
+
+    def test_minutes_and_seconds(self) -> None:
+        assert format_timestamp(62.0) == "1:02"
+
+    def test_hours(self) -> None:
+        assert format_timestamp(3661.0) == "1:01:01"
+
+    def test_fractional_seconds_truncated(self) -> None:
+        assert format_timestamp(15.7) == "0:15"
+
+
+class TestSileroVad:
+    def test_returns_tuples_in_seconds(self) -> None:
+        model = MagicMock()
+        mock_timestamps = [
+            {"start": 16000, "end": 48000},
+            {"start": 64000, "end": 96000},
+        ]
+        with patch("streamlit_app.get_speech_timestamps", return_value=mock_timestamps):
+            result = silero_vad(torch.zeros(1, 160000), model)
+        assert result == [(1.0, 3.0), (4.0, 6.0)]
+
+    def test_empty_audio_returns_empty_list(self) -> None:
+        model = MagicMock()
+        with patch("streamlit_app.get_speech_timestamps", return_value=[]):
+            result = silero_vad(torch.zeros(1, 16000), model)
+        assert result == []
+
+    def test_passes_model_and_sample_rate(self) -> None:
+        model = MagicMock()
+        wav = torch.zeros(1, 16000)
+        with patch("streamlit_app.get_speech_timestamps", return_value=[]) as mock_fn:
+            silero_vad(wav, model)
+        mock_fn.assert_called_once()
+        call_args = mock_fn.call_args
+        assert torch.equal(call_args[0][0], wav.squeeze())
+        assert call_args[0][1] is model
+        assert call_args[1]["sampling_rate"] == 16000
+
+
+class TestGetSpeechSegments:
+    def test_adds_start_buffer(self) -> None:
+        model = MagicMock()
+        with patch("streamlit_app.silero_vad", return_value=[(1.0, 2.0)]):
+            result = get_speech_segments(torch.zeros(1, 160000), model)
+        assert result[0]["start"] == pytest.approx(0.7)
+
+    def test_adds_end_buffer(self) -> None:
+        model = MagicMock()
+        with patch("streamlit_app.silero_vad", return_value=[(1.0, 2.0)]):
+            result = get_speech_segments(torch.zeros(1, 160000), model)
+        assert result[0]["end"] == pytest.approx(2.3)
+
+    def test_clamps_start_buffer_to_zero(self) -> None:
+        model = MagicMock()
+        with patch("streamlit_app.silero_vad", return_value=[(0.1, 1.0)]):
+            result = get_speech_segments(torch.zeros(1, 160000), model)
+        assert result[0]["start"] == 0.0
+
+    def test_clamps_end_buffer_to_duration(self) -> None:
+        model = MagicMock()
+        wav = torch.zeros(1, 32000)  # 2 seconds at 16kHz
+        with patch("streamlit_app.silero_vad", return_value=[(0.5, 1.9)]):
+            result = get_speech_segments(wav, model)
+        assert result[0]["end"] == 2.0
+
+    def test_merges_close_segments(self) -> None:
+        model = MagicMock()
+        with patch(
+            "streamlit_app.silero_vad",
+            return_value=[(1.0, 2.0), (2.3, 3.0)],
+        ):
+            result = get_speech_segments(torch.zeros(1, 160000), model)
+        assert len(result) == 1
+        assert result[0]["start"] == pytest.approx(0.7)
+        assert result[0]["end"] == pytest.approx(3.3)
+
+    def test_keeps_distant_segments_separate(self) -> None:
+        model = MagicMock()
+        with patch(
+            "streamlit_app.silero_vad",
+            return_value=[(1.0, 2.0), (5.0, 6.0)],
+        ):
+            result = get_speech_segments(torch.zeros(1, 160000), model)
+        assert len(result) == 2
+
+    def test_no_speech_falls_back_to_full_audio(self) -> None:
+        model = MagicMock()
+        wav = torch.zeros(1, 160000)  # 10 seconds at 16kHz
+        with patch("streamlit_app.silero_vad", return_value=[]):
+            result = get_speech_segments(wav, model)
+        assert len(result) == 1
+        assert result[0]["start"] == 0.0
+        assert result[0]["end"] == 10.0
 
 
 class TestLoadAndPreprocessAudio:

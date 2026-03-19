@@ -260,11 +260,7 @@ def run_pipeline(
             and guardian_tokenizer is not None
         ):
             if segmented and segments:
-                safety_text = " ".join(
-                    seg_transcript
-                    for line in segment_texts
-                    for seg_transcript in [line.split("] ", 1)[1]]
-                )
+                safety_text = " ".join(line.split("] ", 1)[1] for line in segment_texts)
             else:
                 safety_text = transcript
             is_toxic, toxicity_score = check_safety.__wrapped__(

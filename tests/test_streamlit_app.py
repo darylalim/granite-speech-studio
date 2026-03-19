@@ -860,6 +860,36 @@ class TestRunPipeline:
             return_tensors="pt",
         )
 
+    def test_segmented_safety_handles_bracket_in_transcript(self) -> None:
+        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        tokenizer = processor.tokenizer
+        tokenizer.batch_decode.return_value = ["see figure [3] here"]
+        vad_model = MagicMock()
+        wav = torch.zeros(1, 48000)
+        segments = [{"start": 0.0, "end": 3.0}]
+
+        with patch("streamlit_app.get_speech_segments", return_value=segments):
+            run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+                wav,
+                ["Transcribe"],
+                model,
+                processor,
+                "cpu",
+                guardian_model,
+                guardian_tokenizer,
+                None,
+                None,
+                vad_model,
+                True,
+            )
+
+        guardian_tokenizer.assert_called_once_with(
+            ["see figure [3] here"],
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        )
+
     def test_segmented_translation_skips_punctuation_and_safety(self) -> None:
         model, processor, guardian_model, guardian_tokenizer, punct_model = (
             self._make_mocks()

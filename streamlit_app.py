@@ -216,7 +216,11 @@ def run_pipeline(
     use_segmentation: bool = False,
 ) -> dict[str, dict[str, object]]:
     segmented = use_segmentation and vad_model is not None
-    segments = get_speech_segments(wav, vad_model) if segmented else None
+    segments = (
+        get_speech_segments(wav, vad_model)
+        if segmented and vad_model is not None
+        else None
+    )
     results: dict[str, dict[str, object]] = {}
     for i, task in enumerate(tasks):
         if on_progress:

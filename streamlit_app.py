@@ -51,6 +51,7 @@ TASK_PRESETS: dict[str, list[str]] = {
     "Transcribe Only": ["Transcribe"],
 }
 ENGLISH_TASKS: set[str] = {"Transcribe"}
+SAMPLE_RATE = 16000
 
 
 def format_timestamp(seconds: float) -> str:
@@ -62,7 +63,7 @@ def format_timestamp(seconds: float) -> str:
 
 
 def silero_vad(
-    wav: torch.Tensor, model: torch.nn.Module, sample_rate: int = 16000
+    wav: torch.Tensor, model: torch.nn.Module, sample_rate: int = SAMPLE_RATE
 ) -> list[tuple[float, float]]:
     speech_timestamps = get_speech_timestamps(
         wav.squeeze(), model, sampling_rate=sample_rate
@@ -75,7 +76,7 @@ def silero_vad(
 def get_speech_segments(
     wav: torch.Tensor,
     model: torch.nn.Module,
-    sample_rate: int = 16000,
+    sample_rate: int = SAMPLE_RATE,
 ) -> list[dict[str, float]]:
     duration = wav.shape[-1] / sample_rate
     vad_segments = silero_vad(wav, model, sample_rate)
@@ -129,8 +130,8 @@ def load_and_preprocess_audio(audio_file: UploadedFile) -> tuple[torch.Tensor, f
     duration = wav.shape[1] / sr
     if wav.shape[0] > 1:
         wav = wav.mean(dim=0, keepdim=True)
-    if sr != 16000:
-        wav = torchaudio.functional.resample(wav, sr, 16000)
+    if sr != SAMPLE_RATE:
+        wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
     return wav, duration
 
 
@@ -226,8 +227,8 @@ def run_pipeline(
             total_words = 0
             seg_start_time = time.perf_counter()
             for seg in segments:
-                start_sample = int(seg["start"] * 16000)
-                end_sample = int(seg["end"] * 16000)
+                start_sample = int(seg["start"] * SAMPLE_RATE)
+                end_sample = int(seg["end"] * SAMPLE_RATE)
                 wav_segment = wav[:, start_sample:end_sample]
                 seg_transcript, _ = transcribe_audio.__wrapped__(
                     wav_segment, prompt, model, processor, device

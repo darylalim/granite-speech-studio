@@ -470,6 +470,17 @@ class TestTranscribeAudio:
         assert call_kwargs["add_special_tokens"] is False
         assert transcript == "decoded text"
 
+    def test_max_new_tokens(self) -> None:
+        model, processor, tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+
+        transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
+            wav, "transcribe", model, processor, "cpu"
+        )
+
+        call_kwargs = model.generate.call_args[1]
+        assert call_kwargs["max_new_tokens"] == 512
+
 
 class TestRunPipeline:
     def _make_mocks(

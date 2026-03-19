@@ -191,7 +191,7 @@ def transcribe_audio(
         chat, tokenize=False, add_generation_prompt=True
     )
     inputs = processor(text_prompt, wav, device=device, return_tensors="pt").to(device)
-    outputs = model.generate(**inputs, max_new_tokens=200, do_sample=False, num_beams=1)
+    outputs = model.generate(**inputs, max_new_tokens=512, do_sample=False, num_beams=1)
     num_input_tokens = inputs["input_ids"].shape[-1]
     transcript = tokenizer.batch_decode(
         outputs[:, num_input_tokens:],

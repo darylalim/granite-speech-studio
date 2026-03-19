@@ -61,7 +61,7 @@ Formats seconds to `M:SS` or `H:MM:SS` (e.g., `0:15`, `1:02:30`).
 3. Join all segment lines with `\n` to form the full transcript
 4. If English task, run safety check once on the joined text without timestamps (guardian tokenizer uses `truncation=True`, so very long transcripts will be truncated — acceptable since toxicity in early content is still caught, consistent with existing non-segmented behavior)
 5. `num_words` is summed from per-segment word counts (counted before timestamps are prepended, avoiding timestamp tokens in the count)
-6. `eval_duration` is the sum of all per-segment transcription times
+6. `eval_duration` is wall-clock time for all segments (including punctuation overhead), rounded to 2 decimal places
 
 Segment boundaries are computed once and reused across all tasks.
 

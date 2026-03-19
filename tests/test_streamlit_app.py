@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from streamlit_app import (
+    ENGLISH_TASKS,
     GUARDIAN_MODEL_ID,
     MODEL_ID,
     PUNCTUATION_MODEL_ID,
@@ -77,6 +78,7 @@ class TestPromptChoices:
             "Italian",
             "Japanese",
             "Mandarin Chinese",
+            "English",
         ):
             assert lang in PROMPT_CHOICES
             assert lang in PROMPT_CHOICES[lang]
@@ -87,7 +89,11 @@ class TestPromptChoices:
                 assert value.startswith("translate the speech to ")
 
     def test_total_count(self) -> None:
-        assert len(PROMPT_CHOICES) == 8
+        assert len(PROMPT_CHOICES) == 9
+
+    def test_english_translation_not_in_english_tasks(self) -> None:
+        assert "English" in PROMPT_CHOICES
+        assert "English" not in ENGLISH_TASKS
 
 
 class TestSupportedFormats:

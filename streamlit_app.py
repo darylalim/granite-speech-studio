@@ -35,6 +35,7 @@ PROMPT_CHOICES = {
     "Italian": "translate the speech to Italian",
     "Japanese": "translate the speech to Japanese",
     "Mandarin Chinese": "translate the speech to Mandarin Chinese",
+    "English": "translate the speech to English",
 }
 SUPPORTED_FORMATS = ["wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"]
 TASK_PRESETS: dict[str, list[str]] = {

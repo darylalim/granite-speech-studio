@@ -5,9 +5,11 @@ Streamlit web app for speech-to-text and translation using IBM's Granite Speech 
 ## Features
 
 - **Pipeline processing** — run multiple transcription and translation tasks on the same audio
+- **Translation** — French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English
+- **VAD segmentation** — automatic speech detection with timestamped per-segment output
 - **Punctuation** — automatic capitalization and punctuation on English transcriptions
 - **Safety** — automatic toxicity detection on English transcriptions via Granite Guardian HAP 38m
-- **Presets** — All Tasks, European Languages (French, German, Spanish, Portuguese, Italian), Asian Languages (Japanese, Mandarin Chinese), Transcribe Only
+- **Presets** — All Tasks, European Languages, Asian Languages, Transcribe Only
 - **Custom selection** — pick individual tasks via multiselect
 - **Audio input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
@@ -49,6 +51,7 @@ uv run pytest                # Test
 ## Models
 
 - [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
+- [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection for speech segmentation
 - pcs_en (via [punctuators](https://pypi.org/project/punctuators/)) — English punctuation and capitalization
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection
 

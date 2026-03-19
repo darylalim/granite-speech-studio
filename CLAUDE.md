@@ -66,8 +66,8 @@ uv run streamlit run streamlit_app.py
 
 ### Languages
 
-- English (transcription)
-- French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English (translation)
+- Transcription: English
+- Translation: French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English
 
 ### UI Layout
 
@@ -94,6 +94,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 - Guardian model runs on CPU with default dtype (38M params, fast inference)
 - Punctuation model runs on CPU via ONNX Runtime (no `@torch.inference_mode()`)
 - Silero VAD model runs on CPU (~3MB)
+- `max_new_tokens=512` per segment (prevents truncation on long speech)
 
 ### Error Handling
 

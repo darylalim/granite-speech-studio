@@ -67,7 +67,7 @@ uv run streamlit run streamlit_app.py
 ### Languages
 
 - English (transcription)
-- French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese (translation)
+- French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English (translation)
 
 ### UI Layout
 

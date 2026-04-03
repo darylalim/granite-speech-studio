@@ -1,10 +1,10 @@
 [project]
 name = "granite-speech-pipeline"
 version = "0.6.0"
-description = "Speech-to-text and translation pipeline with punctuation and toxicity detection using IBM Granite models"
+description = "Speech-to-text and translation pipeline using IBM Granite models on Apple Silicon via MLX"
 requires-python = ">=3.12"
 dependencies = [
-    "accelerate>=1.12.0",
+    "mlx-audio",
     "punctuators>=0.0.5",
     "silero-vad",
     "streamlit",

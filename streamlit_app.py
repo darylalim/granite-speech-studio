@@ -4,26 +4,27 @@ import time
 import warnings
 from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 from pathlib import Path
 
 import streamlit as st
 import torch
 import torchaudio
+from mlx_audio.stt.utils import load_model as _load_stt_model
 from punctuators.models import PunctCapSegModelONNX
 from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoModelForSpeechSeq2Seq,
-    AutoProcessor,
-    AutoTokenizer,
-)
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
 )
+# ONNX Runtime warns about missing CUDA on Apple Silicon (used by punctuators)
+warnings.filterwarnings(
+    "ignore", message="Specified provider 'CUDAExecutionProvider' is not in available"
+)
 
-MODEL_ID = "ibm-granite/granite-4.0-1b-speech"
+MODEL_ID = "mlx-community/granite-4.0-1b-speech-8bit"
 GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-38m"
 PUNCTUATION_MODEL_ID = "pcs_en"
 PROMPT_CHOICES = {
@@ -103,23 +104,9 @@ def get_selected_tasks(preset: str | None, custom: list[str]) -> list[str]:
     return custom
 
 
-def get_device() -> str:
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-
 @st.cache_resource(show_spinner=False)
-def load_model(
-    model_id: str,
-    device: str,
-) -> tuple[AutoModelForSpeechSeq2Seq, AutoProcessor]:
-    processor = AutoProcessor.from_pretrained(model_id)
-    dtype = torch.float32 if device == "cpu" else torch.bfloat16
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id, device_map=device, dtype=dtype
-    )
-    return model, processor
+def load_model(model_id: str) -> Any:
+    return _load_stt_model(model_id)
 
 
 def load_and_preprocess_audio(audio_file: UploadedFile) -> tuple[torch.Tensor, float]:
@@ -175,40 +162,23 @@ def check_safety(
     return is_toxic, round(probability, 4)
 
 
-@torch.inference_mode()
 def transcribe_audio(
     wav: torch.Tensor,
     prompt: str,
-    model: AutoModelForSpeechSeq2Seq,
-    processor: AutoProcessor,
-    device: str,
+    model: Any,
 ) -> tuple[str, float]:
     start = time.perf_counter()
-    tokenizer = processor.tokenizer
-    chat = [
-        {"role": "user", "content": f"<|audio|>{prompt}"},
-    ]
-    text_prompt = tokenizer.apply_chat_template(
-        chat, tokenize=False, add_generation_prompt=True
-    )
-    inputs = processor(text_prompt, wav, device=device, return_tensors="pt").to(device)
-    outputs = model.generate(**inputs, max_new_tokens=512, do_sample=False, num_beams=1)
-    num_input_tokens = inputs["input_ids"].shape[-1]
-    transcript = tokenizer.batch_decode(
-        outputs[:, num_input_tokens:],
-        add_special_tokens=False,
-        skip_special_tokens=True,
-    )[0]
-    return transcript, round(time.perf_counter() - start, 2)
+    audio_np = wav.squeeze().numpy()
+    # max_tokens=512 matches previous transformers max_new_tokens limit
+    output = model.generate(audio=audio_np, prompt=prompt, max_tokens=512)
+    return output.text, round(time.perf_counter() - start, 2)
 
 
 @torch.inference_mode()
 def run_pipeline(
     wav: torch.Tensor,
     tasks: list[str],
-    model: AutoModelForSpeechSeq2Seq,
-    processor: AutoProcessor,
-    device: str,
+    model: Any,
     guardian_model: AutoModelForSequenceClassification | None = None,
     guardian_tokenizer: AutoTokenizer | None = None,
     punct_model: PunctCapSegModelONNX | None = None,
@@ -235,9 +205,7 @@ def run_pipeline(
                 start_sample = int(seg["start"] * SAMPLE_RATE)
                 end_sample = int(seg["end"] * SAMPLE_RATE)
                 wav_segment = wav[:, start_sample:end_sample]
-                seg_transcript, _ = transcribe_audio.__wrapped__(
-                    wav_segment, prompt, model, processor, device
-                )
+                seg_transcript, _ = transcribe_audio(wav_segment, prompt, model)
                 if task in ENGLISH_TASKS and punct_model is not None:
                     seg_transcript = apply_punctuation(seg_transcript, punct_model)
                 total_words += len(seg_transcript.split())
@@ -248,9 +216,7 @@ def run_pipeline(
             eval_duration = round(time.perf_counter() - seg_start_time, 2)
             num_words = total_words
         else:
-            transcript, eval_duration = transcribe_audio.__wrapped__(
-                wav, prompt, model, processor, device
-            )
+            transcript, eval_duration = transcribe_audio(wav, prompt, model)
             if task in ENGLISH_TASKS and punct_model is not None:
                 transcript = apply_punctuation(transcript, punct_model)
             num_words = len(transcript.split())
@@ -329,8 +295,6 @@ def main() -> None:
         layout="wide",
     )
 
-    device = get_device()
-
     st.title("\U0001f399\ufe0f Granite Speech Pipeline")
 
     preset = st.pills(
@@ -381,8 +345,8 @@ def main() -> None:
     if st.button("Run Pipeline", type="primary", disabled=not can_run) and can_run:
         progress = st.progress(0, text="Starting pipeline...")
         try:
-            with st.spinner(f"Loading model on {device.upper()}..."):
-                model, processor = load_model(MODEL_ID, device)
+            with st.spinner("Loading speech model..."):
+                model = load_model(MODEL_ID)
             wav, audio_duration = load_and_preprocess_audio(audio_file)
 
             if use_segmentation:
@@ -409,8 +373,6 @@ def main() -> None:
                 wav,
                 tasks,
                 model,
-                processor,
-                device,
                 guardian_model,
                 guardian_tokenizer,
                 punct_model,
@@ -467,7 +429,6 @@ def main() -> None:
         f"Model: {MODEL_ID.split('/')[-1]} | "
         f"Punctuation: {PUNCTUATION_MODEL_ID} | "
         f"Safety: {GUARDIAN_MODEL_ID.split('/')[-1]} | "
-        f"Device: {device.upper()} | "
         f"[Model Card](https://huggingface.co/{MODEL_ID}) | "
         f"[Safety Model](https://huggingface.co/{GUARDIAN_MODEL_ID})"
     )

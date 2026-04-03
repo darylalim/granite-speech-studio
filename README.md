@@ -14,8 +14,7 @@ Streamlit web app for speech-to-text and translation using IBM's Granite Speech 
 - **Audio input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
 - **Deferred loading** — models load on first pipeline run for instant page startup
-- **Metrics** — audio duration, word count, processing time per task
-- **Export** — download per-task text/JSON or combined JSON for all results (safety scores included for transcriptions)
+- **Export** — download per-task transcriptions and translations as text
 
 ## Requirements
 
@@ -33,8 +32,8 @@ uv run streamlit run streamlit_app.py
 
 1. Select a preset or pick individual tasks (transcribe, translate to a language)
 2. Upload an audio file or record from your microphone
-3. Click "Run Pipeline" to process all selected tasks
-4. View side-by-side results and download as text or JSON
+3. Click the play button to process all selected tasks
+4. View side-by-side results and download as text
 
 ## Development
 

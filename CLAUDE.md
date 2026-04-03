@@ -72,11 +72,11 @@ uv run streamlit run streamlit_app.py
 ### UI Layout
 
 - **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
-- **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`)
+- **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`), labels hidden via `label_visibility="collapsed"`
+- **Run button** — icon-only `st.button` (`:material/play_arrow:`) with "Run pipeline" tooltip
 - **Segmentation** — `st.checkbox` for VAD segmentation toggle (default on)
 - **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
 - **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
-- **Footer** — model name, punctuation model name, safety model name, links to model cards
 
 ### Audio Formats
 
@@ -102,11 +102,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Downloads
 
-- **Per-task Text** — plain transcript as `.txt`
-- **Per-task JSON** — `model`, `task`, `audio_duration`, `transcript`, `num_words`, `eval_duration`, plus `is_toxic` and `toxicity_score` for transcription only
-- **Combined JSON** — "Download All" with `model`, `audio_duration`, and all `results` keyed by task name
-
-`st.metric` displays audio duration, words, and processing time per task.
+- **Per-task Text** — plain transcript as `.txt`, icon-only download button (`:material/download:`) with context-aware tooltip ("Download transcription" or "Download translation")
 
 ### Tests
 

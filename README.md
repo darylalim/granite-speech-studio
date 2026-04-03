@@ -1,6 +1,6 @@
 # Granite Speech Pipeline
 
-Streamlit web app for speech-to-text and translation using IBM's Granite Speech models. Process audio through multiple tasks simultaneously with preset task groups. Includes automatic punctuation/capitalization and English toxicity detection.
+Streamlit web app for speech-to-text and translation using IBM's Granite Speech models via [MLX](https://github.com/Blaizzy/mlx-audio). Requires Apple Silicon. Process audio through multiple tasks simultaneously with preset task groups. Includes automatic punctuation/capitalization and English toxicity detection.
 
 ## Features
 
@@ -17,13 +17,10 @@ Streamlit web app for speech-to-text and translation using IBM's Granite Speech 
 - **Metrics** — audio duration, word count, processing time per task
 - **Export** — download per-task text/JSON or combined JSON for all results (safety scores included for transcriptions)
 
-## Hardware Support
+## Requirements
 
-Automatically uses the best available device:
-
-- Apple Silicon (MPS)
-- NVIDIA GPU (CUDA)
-- CPU (fallback)
+- Apple Silicon Mac (M1/M2/M3/M4)
+- Python 3.12+
 
 ## Setup
 
@@ -50,12 +47,13 @@ uv run pytest                # Test
 
 ## Models
 
-- [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
+- [Granite 4.0 1b Speech 8bit](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit) — transcription and translation (MLX, 8-bit quantized)
 - [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection for speech segmentation
 - pcs_en (via [punctuators](https://pypi.org/project/punctuators/)) — English punctuation and capitalization
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection
 
 ## Resources
 
+- [Granite 4.0 1b Speech 8bit (MLX)](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit)
 - [Granite Speech Models](https://huggingface.co/collections/ibm-granite/granite-speech)
 - [Technical Report](https://arxiv.org/abs/2505.08699)

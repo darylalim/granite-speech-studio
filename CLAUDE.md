@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models. Supports multi-task pipeline processing with preset task groups. Includes VAD-based audio segmentation, automatic punctuation/capitalization, and English toxicity detection.
+Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models via [MLX](https://github.com/Blaizzy/mlx-audio) on Apple Silicon. Supports multi-task pipeline processing with preset task groups. Includes VAD-based audio segmentation, automatic punctuation/capitalization, and English toxicity detection.
 
 ## Setup
 
@@ -29,10 +29,10 @@ uv run streamlit run streamlit_app.py
 
 ## Dependencies
 
-- `transformers` — Hugging Face model loading
-- `accelerate` — device mapping for model loading
-- `torch` — tensor operations
-- `torchaudio` — audio loading and resampling
+- `mlx-audio` — MLX-based speech model loading and inference (Apple Silicon)
+- `transformers` — guardian model loading (toxicity detection)
+- `torch` — tensor operations (VAD, guardian model)
+- `torchaudio` — audio loading and resampling (for VAD preprocessing)
 - `torchcodec` — audio decoding backend for torchaudio
 - `punctuators` — English punctuation and capitalization (ONNX)
 - `silero-vad` — Voice Activity Detection for audio segmentation
@@ -59,7 +59,7 @@ uv run streamlit run streamlit_app.py
 
 ### Models
 
-- [Granite 4.0 1b Speech](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) — transcription and translation
+- [Granite 4.0 1b Speech 8bit](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit) — transcription and translation (MLX, 8-bit quantized)
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection (runs on CPU)
 - pcs_en (via `punctuators`) — English punctuation and capitalization (runs on CPU, ONNX)
 - [Silero VAD](https://github.com/snakers4/silero-vad) — Voice Activity Detection for speech segmentation (runs on CPU)
@@ -76,7 +76,7 @@ uv run streamlit run streamlit_app.py
 - **Segmentation** — `st.checkbox` for VAD segmentation toggle (default on)
 - **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
 - **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
-- **Footer** — model name, punctuation model name, safety model name, device, links to model cards
+- **Footer** — model name, punctuation model name, safety model name, links to model cards
 
 ### Audio Formats
 
@@ -84,17 +84,16 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Performance
 
-- Best available device: MPS > CUDA > CPU
+- Speech model runs via MLX on Apple Silicon GPU (8-bit quantized, ~2.9GB)
 - Deferred model loading — speech model loads on first pipeline run, not on page load
 - `@st.cache_resource` to cache models
-- `@torch.inference_mode()` on inference functions
+- `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
-- bfloat16 on MPS/CUDA, float32 on CPU
 - `time.perf_counter()` for timing
 - Guardian model runs on CPU with default dtype (38M params, fast inference)
-- Punctuation model runs on CPU via ONNX Runtime (no `@torch.inference_mode()`)
+- Punctuation model runs on CPU via ONNX Runtime
 - Silero VAD model runs on CPU (~3MB)
-- `max_new_tokens=512` per segment (prevents truncation on long speech)
+- `max_tokens=512` per segment (prevents truncation on long speech)
 
 ### Error Handling
 
@@ -111,10 +110,11 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for device detection, prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, punctuation model loading, punctuation application, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`, plus new segmentation cases in `TestRunPipeline`.
+`tests/test_streamlit_app.py` — unit tests for prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, punctuation model loading, punctuation application, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`, plus segmentation cases in `TestRunPipeline`.
 
 ## Resources
 
+- [Granite 4.0 1b Speech 8bit (MLX)](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit)
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m)
 - [Granite Speech Models](https://huggingface.co/collections/ibm-granite/granite-speech)
 - [Technical Report](https://arxiv.org/abs/2505.08699)

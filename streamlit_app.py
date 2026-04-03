@@ -318,9 +318,10 @@ def main() -> None:
             "Upload audio file",
             type=SUPPORTED_FORMATS,
             help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}",
+            label_visibility="collapsed",
         )
     with record_tab:
-        recorded = st.audio_input("Record audio")
+        recorded = st.audio_input("Record audio", label_visibility="collapsed")
 
     audio_file = recorded or uploaded
 

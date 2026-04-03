@@ -381,7 +381,7 @@ def main() -> None:
                 vad_model=vad_model,
                 use_segmentation=use_segmentation,
             )
-            progress.progress(1.0, text="Done!")
+            progress.empty()
             st.session_state.results = pipeline_results
             st.session_state.audio_duration = audio_duration
             stem = Path(audio_file.name).stem

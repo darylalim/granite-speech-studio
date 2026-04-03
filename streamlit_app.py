@@ -1,5 +1,4 @@
 import io
-import json
 import time
 import warnings
 from collections.abc import Callable
@@ -246,16 +245,11 @@ def run_pipeline(
 def _render_result_card(
     task_name: str,
     result: dict[str, object],
-    audio_duration: float,
     stem: str,
 ) -> None:
     with st.container(border=True):
         st.subheader(task_name)
-        st.code(result["transcript"], language=None)
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Duration", f"{audio_duration:.2f}s")
-        m2.metric("Words", result["num_words"])
-        m3.metric("Time", f"{result['eval_duration']}s")
+        st.text(result["transcript"])
         if "is_toxic" in result:
             score = f"score: {result['toxicity_score']:.1%}"
             if result["is_toxic"]:
@@ -263,28 +257,15 @@ def _render_result_card(
             else:
                 st.success(f"Content is safe ({score})")
         slug = task_name.lower().replace(" ", "_")
-        d1, d2 = st.columns(2)
-        d1.download_button(
-            "Text",
+        download_help = "Download transcription" if task_name in ENGLISH_TASKS else "Download translation"
+        st.download_button(
+            "",
             result["transcript"],
             f"{stem}_{slug}.txt",
             "text/plain",
             key=f"dl_txt_{task_name}",
-        )
-        d2.download_button(
-            "JSON",
-            json.dumps(
-                {
-                    "model": MODEL_ID,
-                    "task": task_name,
-                    "audio_duration": audio_duration,
-                    **result,
-                },
-                indent=2,
-            ),
-            f"{stem}_{slug}.json",
-            "application/json",
-            key=f"dl_json_{task_name}",
+            icon=":material/download:",
+            help=download_help,
         )
 
 
@@ -333,7 +314,7 @@ def main() -> None:
         else None
     )
     if input_key != st.session_state.get("_last_input_key"):
-        for key in ("results", "result_filename", "audio_duration"):
+        for key in ("results", "result_stem"):
             st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 
@@ -383,11 +364,10 @@ def main() -> None:
             )
             progress.empty()
             st.session_state.results = pipeline_results
-            st.session_state.audio_duration = audio_duration
             stem = Path(audio_file.name).stem
             if audio_file.name == "audio.wav":
                 stem = datetime.now().strftime("recording_%Y%m%d_%H%M%S")
-            st.session_state.result_filename = f"{stem}_pipeline.json"
+            st.session_state.result_stem = stem
         except RuntimeError as e:
             st.error(str(e))
             return
@@ -398,8 +378,7 @@ def main() -> None:
 
     if "results" in st.session_state:
         results = st.session_state.results
-        audio_duration = st.session_state.audio_duration
-        stem = st.session_state.result_filename.replace("_pipeline.json", "")
+        stem = st.session_state.result_stem
         task_names = list(results.keys())
 
         num_cols = min(len(task_names), 3)
@@ -409,30 +388,8 @@ def main() -> None:
             for col, task_name in zip(cols, row_tasks):
                 with col:
                     _render_result_card(
-                        task_name, results[task_name], audio_duration, stem
+                        task_name, results[task_name], stem
                     )
-
-        st.download_button(
-            "Download All (JSON)",
-            json.dumps(
-                {
-                    "model": MODEL_ID,
-                    "audio_duration": audio_duration,
-                    "results": results,
-                },
-                indent=2,
-            ),
-            st.session_state.result_filename,
-            "application/json",
-        )
-
-    st.caption(
-        f"Model: {MODEL_ID.split('/')[-1]} | "
-        f"Punctuation: {PUNCTUATION_MODEL_ID} | "
-        f"Safety: {GUARDIAN_MODEL_ID.split('/')[-1]} | "
-        f"[Model Card](https://huggingface.co/{MODEL_ID}) | "
-        f"[Safety Model](https://huggingface.co/{GUARDIAN_MODEL_ID})"
-    )
 
 
 if __name__ == "__main__":

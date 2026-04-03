@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -871,26 +870,18 @@ class TestRunPipeline:
 
 
 class TestRenderResultCard:
-    def _make_columns(self, *counts: int) -> list[list[MagicMock]]:
-        return [[MagicMock() for _ in range(n)] for n in counts]
-
     @patch("streamlit_app.st")
-    def test_renders_metrics(self, mock_st: MagicMock) -> None:
-        m1, m2, m3 = MagicMock(), MagicMock(), MagicMock()
-        mock_st.columns.side_effect = [[m1, m2, m3], self._make_columns(2)[0]]
+    def test_renders_text(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello",
             "num_words": 1,
             "eval_duration": 0.5,
         }
-        _render_result_card("Transcribe", result, 2.5, "test")
-        m1.metric.assert_called_once_with("Duration", "2.50s")
-        m2.metric.assert_called_once_with("Words", 1)
-        m3.metric.assert_called_once_with("Time", "0.5s")
+        _render_result_card("Transcribe", result, "test")
+        mock_st.text.assert_called_once_with("hello")
 
     @patch("streamlit_app.st")
     def test_shows_safe_banner(self, mock_st: MagicMock) -> None:
-        mock_st.columns.side_effect = self._make_columns(3, 2)
         result = {
             "transcript": "hello",
             "num_words": 1,
@@ -898,14 +889,13 @@ class TestRenderResultCard:
             "is_toxic": False,
             "toxicity_score": 0.1,
         }
-        _render_result_card("Transcribe", result, 1.0, "test")
+        _render_result_card("Transcribe", result, "test")
         mock_st.success.assert_called_once()
         assert "safe" in mock_st.success.call_args[0][0].lower()
         assert "10.0%" in mock_st.success.call_args[0][0]
 
     @patch("streamlit_app.st")
     def test_shows_toxic_banner(self, mock_st: MagicMock) -> None:
-        mock_st.columns.side_effect = self._make_columns(3, 2)
         result = {
             "transcript": "bad content",
             "num_words": 2,
@@ -913,63 +903,59 @@ class TestRenderResultCard:
             "is_toxic": True,
             "toxicity_score": 0.9,
         }
-        _render_result_card("Transcribe", result, 1.0, "test")
+        _render_result_card("Transcribe", result, "test")
         mock_st.warning.assert_called_once()
         assert "toxic" in mock_st.warning.call_args[0][0].lower()
         assert "90.0%" in mock_st.warning.call_args[0][0]
 
     @patch("streamlit_app.st")
     def test_no_safety_banner_for_translation(self, mock_st: MagicMock) -> None:
-        mock_st.columns.side_effect = self._make_columns(3, 2)
         result = {
             "transcript": "bonjour",
             "num_words": 1,
             "eval_duration": 0.5,
         }
-        _render_result_card("French", result, 1.0, "test")
+        _render_result_card("French", result, "test")
         mock_st.success.assert_not_called()
         mock_st.warning.assert_not_called()
 
     @patch("streamlit_app.st")
     def test_download_filenames_use_slug(self, mock_st: MagicMock) -> None:
-        d1, d2 = MagicMock(), MagicMock()
-        mock_st.columns.side_effect = [self._make_columns(3)[0], [d1, d2]]
         result = {
             "transcript": "hello world",
             "num_words": 2,
             "eval_duration": 0.5,
         }
-        _render_result_card("Mandarin Chinese", result, 1.0, "audio")
-        txt_filename = d1.download_button.call_args[0][2]
-        json_filename = d2.download_button.call_args[0][2]
+        _render_result_card("Mandarin Chinese", result, "audio")
+        txt_filename = mock_st.download_button.call_args[0][2]
         assert txt_filename == "audio_mandarin_chinese.txt"
-        assert json_filename == "audio_mandarin_chinese.json"
 
     @patch("streamlit_app.st")
-    def test_json_download_payload(self, mock_st: MagicMock) -> None:
-        d1, d2 = MagicMock(), MagicMock()
-        mock_st.columns.side_effect = [self._make_columns(3)[0], [d1, d2]]
+    def test_download_tooltip_for_transcription(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello",
             "num_words": 1,
             "eval_duration": 0.5,
         }
-        _render_result_card("French", result, 2.5, "test")
-        payload = json.loads(d2.download_button.call_args[0][1])
-        assert payload["model"] == MODEL_ID
-        assert payload["task"] == "French"
-        assert payload["audio_duration"] == 2.5
-        assert payload["transcript"] == "hello"
-        assert payload["num_words"] == 1
-        assert payload["eval_duration"] == 0.5
+        _render_result_card("Transcribe", result, "test")
+        assert mock_st.download_button.call_args[1]["help"] == "Download transcription"
+
+    @patch("streamlit_app.st")
+    def test_download_tooltip_for_translation(self, mock_st: MagicMock) -> None:
+        result = {
+            "transcript": "bonjour",
+            "num_words": 1,
+            "eval_duration": 0.5,
+        }
+        _render_result_card("French", result, "test")
+        assert mock_st.download_button.call_args[1]["help"] == "Download translation"
 
     @patch("streamlit_app.st")
     def test_renders_bordered_container(self, mock_st: MagicMock) -> None:
-        mock_st.columns.side_effect = self._make_columns(3, 2)
         result = {
             "transcript": "hello",
             "num_words": 1,
             "eval_duration": 0.5,
         }
-        _render_result_card("Transcribe", result, 1.0, "test")
+        _render_result_card("Transcribe", result, "test")
         mock_st.container.assert_called_once_with(border=True)

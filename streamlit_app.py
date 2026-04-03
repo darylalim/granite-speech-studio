@@ -343,7 +343,7 @@ def main() -> None:
 
     can_run = audio_file is not None and len(tasks) > 0
 
-    if st.button("Run Pipeline", type="primary", disabled=not can_run) and can_run:
+    if st.button("", type="primary", disabled=not can_run, icon=":material/play_arrow:", help="Run pipeline") and can_run:
         progress = st.progress(0, text="Starting pipeline...")
         try:
             with st.spinner("Loading speech model..."):

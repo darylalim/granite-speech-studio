@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import torch
 
@@ -17,13 +18,12 @@ from streamlit_app import (
     apply_punctuation,
     check_safety,
     format_timestamp,
-    get_device,
     get_selected_tasks,
     get_speech_segments,
     load_and_preprocess_audio,
     load_guardian_model,
-    load_punctuation_model,
     load_model,
+    load_punctuation_model,
     load_vad_model,
     run_pipeline,
     silero_vad,
@@ -35,33 +35,13 @@ AUDIO_DIR = Path(__file__).parent / "data" / "audio"
 
 class TestModelIds:
     def test_model_id(self) -> None:
-        assert MODEL_ID == "ibm-granite/granite-4.0-1b-speech"
+        assert MODEL_ID == "mlx-community/granite-4.0-1b-speech-8bit"
 
     def test_guardian_model_id(self) -> None:
         assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-38m"
 
     def test_punctuation_model_id(self) -> None:
         assert PUNCTUATION_MODEL_ID == "pcs_en"
-
-
-class TestGetDevice:
-    @patch("streamlit_app.torch")
-    def test_mps_preferred(self, mock_torch: MagicMock) -> None:
-        mock_torch.backends.mps.is_available.return_value = True
-        mock_torch.cuda.is_available.return_value = True
-        assert get_device() == "mps"
-
-    @patch("streamlit_app.torch")
-    def test_cuda_fallback(self, mock_torch: MagicMock) -> None:
-        mock_torch.backends.mps.is_available.return_value = False
-        mock_torch.cuda.is_available.return_value = True
-        assert get_device() == "cuda"
-
-    @patch("streamlit_app.torch")
-    def test_cpu_fallback(self, mock_torch: MagicMock) -> None:
-        mock_torch.backends.mps.is_available.return_value = False
-        mock_torch.cuda.is_available.return_value = False
-        assert get_device() == "cpu"
 
 
 class TestPromptChoices:
@@ -283,33 +263,25 @@ class TestLoadAndPreprocessAudio:
 
 
 class TestLoadModel:
-    @patch("streamlit_app.AutoProcessor")
-    @patch("streamlit_app.AutoModelForSpeechSeq2Seq")
+    @patch("streamlit_app._load_stt_model")
     @patch("streamlit_app.st")
-    def test_uses_float32_on_cpu(
+    def test_calls_load_stt_model(
         self,
         _mock_st: MagicMock,
-        mock_model_cls: MagicMock,
-        mock_processor_cls: MagicMock,
+        mock_load: MagicMock,
     ) -> None:
-        load_model.__wrapped__("test-model", "cpu")  # type: ignore[attr-defined]
-        mock_model_cls.from_pretrained.assert_called_once_with(
-            "test-model", device_map="cpu", dtype=torch.float32
-        )
+        load_model.__wrapped__("test-model")  # type: ignore[attr-defined]
+        mock_load.assert_called_once_with("test-model")
 
-    @patch("streamlit_app.AutoProcessor")
-    @patch("streamlit_app.AutoModelForSpeechSeq2Seq")
+    @patch("streamlit_app._load_stt_model")
     @patch("streamlit_app.st")
-    def test_uses_bfloat16_on_gpu(
+    def test_returns_model(
         self,
         _mock_st: MagicMock,
-        mock_model_cls: MagicMock,
-        mock_processor_cls: MagicMock,
+        mock_load: MagicMock,
     ) -> None:
-        load_model.__wrapped__("test-model", "cuda")  # type: ignore[attr-defined]
-        mock_model_cls.from_pretrained.assert_called_once_with(
-            "test-model", device_map="cuda", dtype=torch.bfloat16
-        )
+        result = load_model.__wrapped__("test-model")  # type: ignore[attr-defined]
+        assert result == mock_load.return_value
 
 
 class TestLoadGuardianModel:
@@ -429,104 +401,75 @@ class TestCheckSafety:
 
 
 class TestTranscribeAudio:
-    def _make_mocks(self) -> tuple[MagicMock, MagicMock, MagicMock]:
-        tokenizer = MagicMock()
-        tokenizer.apply_chat_template.return_value = "formatted"
-        tokenizer.batch_decode.return_value = ["decoded text"]
-        processor = MagicMock()
-        processor.tokenizer = tokenizer
+    def test_calls_model_generate(self) -> None:
         model = MagicMock()
-        return model, processor, tokenizer
-
-    def test_no_system_prompt_in_chat(self) -> None:
-        model, processor, tokenizer = self._make_mocks()
+        model.generate.return_value = MagicMock(text="transcribed text")
         wav = torch.zeros(1, 16000)
 
-        transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
-            wav, "transcribe", model, processor, "cpu"
-        )
+        transcript, _ = transcribe_audio(wav, "test prompt", model)
 
-        chat_arg = tokenizer.apply_chat_template.call_args[0][0]
-        roles = [msg["role"] for msg in chat_arg]
-        assert "system" not in roles
-        assert roles == ["user"]
+        model.generate.assert_called_once()
+        call_kwargs = model.generate.call_args[1]
+        assert call_kwargs["prompt"] == "test prompt"
+        assert call_kwargs["max_tokens"] == 512
+        assert transcript == "transcribed text"
 
-    def test_user_content_has_audio_tag(self) -> None:
-        model, processor, tokenizer = self._make_mocks()
-        wav = torch.zeros(1, 16000)
+    def test_audio_passed_as_squeezed_numpy(self) -> None:
+        model = MagicMock()
+        model.generate.return_value = MagicMock(text="text")
+        wav = torch.randn(1, 16000)
 
-        transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
-            wav, "test prompt", model, processor, "cpu"
-        )
-
-        chat_arg = tokenizer.apply_chat_template.call_args[0][0]
-        assert chat_arg[0]["content"] == "<|audio|>test prompt"
-
-    def test_uses_batch_decode(self) -> None:
-        model, processor, tokenizer = self._make_mocks()
-        wav = torch.zeros(1, 16000)
-
-        transcript, _ = transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
-            wav, "transcribe", model, processor, "cpu"
-        )
-
-        tokenizer.batch_decode.assert_called_once()
-        call_kwargs = tokenizer.batch_decode.call_args[1]
-        assert call_kwargs["skip_special_tokens"] is True
-        assert call_kwargs["add_special_tokens"] is False
-        assert transcript == "decoded text"
-
-    def test_max_new_tokens(self) -> None:
-        model, processor, tokenizer = self._make_mocks()
-        wav = torch.zeros(1, 16000)
-
-        transcribe_audio.__wrapped__(  # type: ignore[attr-defined]
-            wav, "transcribe", model, processor, "cpu"
-        )
+        transcribe_audio(wav, "prompt", model)
 
         call_kwargs = model.generate.call_args[1]
-        assert call_kwargs["max_new_tokens"] == 512
+        audio = call_kwargs["audio"]
+        assert isinstance(audio, np.ndarray)
+        assert audio.shape == (16000,)
+
+    def test_returns_elapsed_time(self) -> None:
+        model = MagicMock()
+        model.generate.return_value = MagicMock(text="text")
+        wav = torch.zeros(1, 16000)
+
+        _, elapsed = transcribe_audio(wav, "prompt", model)
+
+        assert isinstance(elapsed, float)
+        assert elapsed >= 0
 
 
 class TestRunPipeline:
     def _make_mocks(
         self,
-    ) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
-        tokenizer = MagicMock()
-        tokenizer.apply_chat_template.return_value = "formatted"
-        tokenizer.batch_decode.return_value = ["decoded text"]
-        processor = MagicMock()
-        processor.tokenizer = tokenizer
+    ) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
         model = MagicMock()
+        model.generate.return_value = MagicMock(text="decoded text")
         guardian_tokenizer = MagicMock()
         guardian_tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
         guardian_model = MagicMock()
         guardian_model.return_value.logits = torch.tensor([[5.0, -5.0]])
         punct_model = MagicMock()
         punct_model.infer.return_value = [["Decoded text."]]
-        return model, processor, guardian_model, guardian_tokenizer, punct_model
+        return model, guardian_model, guardian_tokenizer, punct_model
 
     def test_returns_dict_keyed_by_task(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
         tasks = ["Transcribe", "French"]
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, tasks, model, processor, "cpu", guardian_model, guardian_tokenizer
+            wav, tasks, model, guardian_model, guardian_tokenizer
         )
 
         assert set(results.keys()) == {"Transcribe", "French"}
 
     def test_each_result_has_transcript_and_duration(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
@@ -537,58 +480,51 @@ class TestRunPipeline:
         assert "num_words" in result
 
     def test_empty_tasks_returns_empty_dict(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, [], model, processor, "cpu", guardian_model, guardian_tokenizer
+            wav, [], model, guardian_model, guardian_tokenizer
         )
 
         assert results == {}
 
     def test_uses_correct_prompt_per_task(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
-        tokenizer = processor.tokenizer
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe", "French"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
 
-        calls = tokenizer.apply_chat_template.call_args_list
+        calls = model.generate.call_args_list
         assert len(calls) == 2
-        first_chat = calls[0][0][0]
-        second_chat = calls[1][0][0]
-        assert PROMPT_CHOICES["Transcribe"] in first_chat[0]["content"]
-        assert PROMPT_CHOICES["French"] in second_chat[0]["content"]
+        assert calls[0][1]["prompt"] == PROMPT_CHOICES["Transcribe"]
+        assert calls[1][1]["prompt"] == PROMPT_CHOICES["French"]
 
     def test_preserves_task_order(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
         tasks = ["Japanese", "Transcribe", "German"]
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, tasks, model, processor, "cpu", guardian_model, guardian_tokenizer
+            wav, tasks, model, guardian_model, guardian_tokenizer
         )
 
         assert list(results.keys()) == tasks
 
     def test_each_result_has_safety_fields(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
@@ -599,7 +535,7 @@ class TestRunPipeline:
         assert result["is_toxic"] is False
 
     def test_toxic_content_flagged(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         guardian_model.return_value.logits = torch.tensor([[-5.0, 5.0]])
         wav = torch.zeros(1, 16000)
 
@@ -607,8 +543,6 @@ class TestRunPipeline:
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
@@ -618,15 +552,13 @@ class TestRunPipeline:
         assert result["toxicity_score"] > 0.5
 
     def test_safety_check_receives_transcript(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
@@ -636,11 +568,11 @@ class TestRunPipeline:
         )
 
     def test_translation_tasks_skip_safety_check(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, ["French"], model, processor, "cpu", guardian_model, guardian_tokenizer
+            wav, ["French"], model, guardian_model, guardian_tokenizer
         )
 
         result = results["French"]
@@ -649,15 +581,13 @@ class TestRunPipeline:
         guardian_tokenizer.assert_not_called()
 
     def test_mixed_tasks_safety_only_on_transcribe(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe", "French"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
@@ -668,17 +598,13 @@ class TestRunPipeline:
         assert "toxicity_score" not in results["French"]
 
     def test_punctuation_applied_to_english(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = (
-            self._make_mocks()
-        )
+        model, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
             punct_model,
@@ -688,17 +614,13 @@ class TestRunPipeline:
         assert results["Transcribe"]["transcript"] == "Decoded text."
 
     def test_punctuation_skipped_for_translation(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = (
-            self._make_mocks()
-        )
+        model, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["French"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
             punct_model,
@@ -708,17 +630,13 @@ class TestRunPipeline:
         assert results["French"]["transcript"] == "decoded text"
 
     def test_punctuation_before_safety_check(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = (
-            self._make_mocks()
-        )
+        model, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
             punct_model,
@@ -730,15 +648,13 @@ class TestRunPipeline:
         )
 
     def test_pipeline_works_without_punct_model(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
         )
@@ -746,7 +662,7 @@ class TestRunPipeline:
         assert results["Transcribe"]["transcript"] == "decoded text"
 
     def test_segmented_transcript_has_timestamps(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)  # 3 seconds
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
@@ -756,8 +672,6 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 None,
@@ -772,7 +686,7 @@ class TestRunPipeline:
         assert "\n" in transcript
 
     def test_segmented_eval_duration_is_rounded_float(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
@@ -782,8 +696,6 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 None,
@@ -797,7 +709,7 @@ class TestRunPipeline:
         assert duration >= 0
 
     def test_segmented_num_words_excludes_timestamps(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
@@ -807,8 +719,6 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 None,
@@ -821,9 +731,7 @@ class TestRunPipeline:
         assert results["Transcribe"]["num_words"] == 4
 
     def test_segmented_punctuation_per_segment(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = (
-            self._make_mocks()
-        )
+        model, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
@@ -833,8 +741,6 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 punct_model,
@@ -847,9 +753,7 @@ class TestRunPipeline:
         assert punct_model.infer.call_count == 2
 
     def test_segmented_safety_on_joined_text_without_timestamps(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = (
-            self._make_mocks()
-        )
+        model, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
@@ -859,8 +763,6 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 punct_model,
@@ -878,9 +780,8 @@ class TestRunPipeline:
         )
 
     def test_segmented_safety_handles_bracket_in_transcript(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
-        tokenizer = processor.tokenizer
-        tokenizer.batch_decode.return_value = ["see figure [3] here"]
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model.generate.return_value = MagicMock(text="see figure [3] here")
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 3.0}]
@@ -890,8 +791,6 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 None,
@@ -908,9 +807,7 @@ class TestRunPipeline:
         )
 
     def test_segmented_translation_skips_punctuation_and_safety(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, punct_model = (
-            self._make_mocks()
-        )
+        model, guardian_model, guardian_tokenizer, punct_model = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
@@ -920,8 +817,6 @@ class TestRunPipeline:
                 wav,
                 ["French"],
                 model,
-                processor,
-                "cpu",
                 guardian_model,
                 guardian_tokenizer,
                 punct_model,
@@ -935,7 +830,7 @@ class TestRunPipeline:
         assert "is_toxic" not in results["French"]
 
     def test_pipeline_unchanged_when_segmentation_disabled(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         vad_model = MagicMock()
         wav = torch.zeros(1, 16000)
 
@@ -943,8 +838,6 @@ class TestRunPipeline:
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
             None,
@@ -958,15 +851,13 @@ class TestRunPipeline:
         assert results["Transcribe"]["transcript"] == "decoded text"
 
     def test_pipeline_unchanged_when_vad_model_none(self) -> None:
-        model, processor, guardian_model, guardian_tokenizer, _ = self._make_mocks()
+        model, guardian_model, guardian_tokenizer, _ = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
-            processor,
-            "cpu",
             guardian_model,
             guardian_tokenizer,
             None,

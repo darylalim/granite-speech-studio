@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models via [MLX](https://github.com/Blaizzy/mlx-audio) on Apple Silicon. Supports multi-task pipeline processing with preset task groups. Includes VAD-based audio segmentation, automatic punctuation/capitalization, and English toxicity detection.
+Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models via [MLX](https://github.com/Blaizzy/mlx-audio) on Apple Silicon. Supports multi-task pipeline processing with preset task groups. Includes VAD-based audio segmentation and English toxicity detection.
 
 ## Setup
 
@@ -34,7 +34,6 @@ uv run streamlit run streamlit_app.py
 - `torch` — tensor operations (VAD, guardian model)
 - `torchaudio` — audio loading and resampling (for VAD preprocessing)
 - `torchcodec` — audio decoding backend for torchaudio
-- `punctuators` — English punctuation and capitalization (ONNX)
 - `silero-vad` — Voice Activity Detection for audio segmentation
 - `streamlit` — web user interface
 - `ruff` — linting/formatting (dev)
@@ -61,7 +60,6 @@ uv run streamlit run streamlit_app.py
 
 - [Granite 4.0 1b Speech 8bit](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit) — transcription and translation (MLX, 8-bit quantized)
 - [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection (runs on CPU)
-- pcs_en (via `punctuators`) — English punctuation and capitalization (runs on CPU, ONNX)
 - [Silero VAD](https://github.com/snakers4/silero-vad) — Voice Activity Detection for speech segmentation (runs on CPU)
 
 ### Languages
@@ -91,7 +89,6 @@ wav, mp3, m4a, ogg, flac, webm, aac
 - `io.BytesIO` for in-memory audio loading (no temp files)
 - `time.perf_counter()` for timing
 - Guardian model runs on CPU with default dtype (38M params, fast inference)
-- Punctuation model runs on CPU via ONNX Runtime
 - Silero VAD model runs on CPU (~3MB)
 - `max_tokens=512` per segment (prevents truncation on long speech)
 
@@ -106,7 +103,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, punctuation model loading, punctuation application, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`, plus segmentation cases in `TestRunPipeline`.
+`tests/test_streamlit_app.py` — unit tests for prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`, plus segmentation cases in `TestRunPipeline`.
 
 ## Resources
 

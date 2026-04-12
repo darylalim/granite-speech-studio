@@ -10,7 +10,6 @@ import streamlit as st
 import torch
 import torchaudio
 from mlx_audio.stt.utils import load_model as _load_stt_model
-from punctuators.models import PunctCapSegModelONNX
 from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -18,14 +17,8 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
 )
-# ONNX Runtime warns about missing CUDA on Apple Silicon (used by punctuators)
-warnings.filterwarnings(
-    "ignore", message="Specified provider 'CUDAExecutionProvider' is not in available"
-)
-
 MODEL_ID = "mlx-community/granite-4.0-1b-speech-8bit"
 GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-38m"
-PUNCTUATION_MODEL_ID = "pcs_en"
 PROMPT_CHOICES = {
     "Transcribe": "can you transcribe the speech into a written format?",
     "French": "translate the speech to French",
@@ -132,20 +125,8 @@ def load_guardian_model(
 
 
 @st.cache_resource(show_spinner=False)
-def load_punctuation_model(model_id: str) -> PunctCapSegModelONNX:
-    return PunctCapSegModelONNX.from_pretrained(model_id)
-
-
-@st.cache_resource(show_spinner=False)
 def load_vad_model() -> torch.nn.Module:
     return load_silero_vad()
-
-
-def apply_punctuation(text: str, model: PunctCapSegModelONNX) -> str:
-    result = model.infer([text])
-    output = " ".join(result[0])
-    output = output.replace("<unk>", " ").replace("<Unk>", " ")
-    return " ".join(output.split()).strip()
 
 
 @torch.inference_mode()
@@ -180,7 +161,6 @@ def run_pipeline(
     model: Any,
     guardian_model: AutoModelForSequenceClassification | None = None,
     guardian_tokenizer: AutoTokenizer | None = None,
-    punct_model: PunctCapSegModelONNX | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
     vad_model: torch.nn.Module | None = None,
     use_segmentation: bool = False,
@@ -205,8 +185,6 @@ def run_pipeline(
                 end_sample = int(seg["end"] * SAMPLE_RATE)
                 wav_segment = wav[:, start_sample:end_sample]
                 seg_transcript, _ = transcribe_audio(wav_segment, prompt, model)
-                if task in ENGLISH_TASKS and punct_model is not None:
-                    seg_transcript = apply_punctuation(seg_transcript, punct_model)
                 total_words += len(seg_transcript.split())
                 ts_start = format_timestamp(seg["start"])
                 ts_end = format_timestamp(seg["end"])
@@ -216,8 +194,6 @@ def run_pipeline(
             num_words = total_words
         else:
             transcript, eval_duration = transcribe_audio(wav, prompt, model)
-            if task in ENGLISH_TASKS and punct_model is not None:
-                transcript = apply_punctuation(transcript, punct_model)
             num_words = len(transcript.split())
         result: dict[str, object] = {
             "transcript": transcript,
@@ -257,7 +233,11 @@ def _render_result_card(
             else:
                 st.success(f"Content is safe ({score})")
         slug = task_name.lower().replace(" ", "_")
-        download_help = "Download transcription" if task_name in ENGLISH_TASKS else "Download translation"
+        download_help = (
+            "Download transcription"
+            if task_name in ENGLISH_TASKS
+            else "Download translation"
+        )
         st.download_button(
             "",
             result["transcript"],
@@ -324,7 +304,16 @@ def main() -> None:
 
     can_run = audio_file is not None and len(tasks) > 0
 
-    if st.button("", type="primary", disabled=not can_run, icon=":material/play_arrow:", help="Run pipeline") and can_run:
+    if (
+        st.button(
+            "",
+            type="primary",
+            disabled=not can_run,
+            icon=":material/play_arrow:",
+            help="Run pipeline",
+        )
+        and can_run
+    ):
         progress = st.progress(0, text="Starting pipeline...")
         try:
             with st.spinner("Loading speech model..."):
@@ -341,14 +330,11 @@ def main() -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
 
             if ENGLISH_TASKS.intersection(tasks):
-                with st.spinner("Loading punctuation model..."):
-                    punct_model = load_punctuation_model(PUNCTUATION_MODEL_ID)
                 with st.spinner("Loading safety model..."):
                     guardian_model, guardian_tokenizer = load_guardian_model(
                         GUARDIAN_MODEL_ID
                     )
             else:
-                punct_model = None
                 guardian_model, guardian_tokenizer = None, None
 
             pipeline_results = run_pipeline(
@@ -357,7 +343,6 @@ def main() -> None:
                 model,
                 guardian_model,
                 guardian_tokenizer,
-                punct_model,
                 on_progress=update_progress,
                 vad_model=vad_model,
                 use_segmentation=use_segmentation,
@@ -387,9 +372,7 @@ def main() -> None:
             cols = st.columns(num_cols)
             for col, task_name in zip(cols, row_tasks):
                 with col:
-                    _render_result_card(
-                        task_name, results[task_name], stem
-                    )
+                    _render_result_card(task_name, results[task_name], stem)
 
 
 if __name__ == "__main__":

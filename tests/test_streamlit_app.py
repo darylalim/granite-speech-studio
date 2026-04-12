@@ -11,11 +11,9 @@ from streamlit_app import (
     MODEL_ID,
     PROMPT_CHOICES,
     SUPPORTED_FORMATS,
-    TASK_PRESETS,
     _render_result_card,
     check_safety,
     format_timestamp,
-    get_selected_tasks,
     get_speech_segments,
     load_and_preprocess_audio,
     load_guardian_model,
@@ -71,59 +69,8 @@ class TestPromptChoices:
 
 class TestSupportedFormats:
     def test_all_formats_present(self) -> None:
-        expected = {"wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"}
+        expected = {"wav", "flac", "m4a"}
         assert set(SUPPORTED_FORMATS) == expected
-
-
-class TestTaskPresets:
-    def test_all_tasks_preset(self) -> None:
-        assert set(TASK_PRESETS["All Tasks"]) == set(PROMPT_CHOICES.keys())
-
-    def test_european_preset(self) -> None:
-        expected = {
-            "Transcribe",
-            "French",
-            "German",
-            "Spanish",
-            "Portuguese",
-            "Italian",
-        }
-        assert set(TASK_PRESETS["European Languages"]) == expected
-
-    def test_asian_preset(self) -> None:
-        expected = {"Transcribe", "Japanese", "Mandarin Chinese"}
-        assert set(TASK_PRESETS["Asian Languages"]) == expected
-
-    def test_transcribe_only_preset(self) -> None:
-        assert TASK_PRESETS["Transcribe Only"] == ["Transcribe"]
-
-    def test_all_preset_values_are_valid_prompt_keys(self) -> None:
-        for preset_name, tasks in TASK_PRESETS.items():
-            for task in tasks:
-                assert task in PROMPT_CHOICES, (
-                    f"{task} in preset '{preset_name}' not in PROMPT_CHOICES"
-                )
-
-    def test_preset_count(self) -> None:
-        assert len(TASK_PRESETS) == 4
-
-
-class TestGetSelectedTasks:
-    def test_preset_returns_preset_tasks(self) -> None:
-        result = get_selected_tasks("European Languages", [])
-        assert result == TASK_PRESETS["European Languages"]
-
-    def test_custom_returns_custom_tasks(self) -> None:
-        result = get_selected_tasks(None, ["French", "Japanese"])
-        assert result == ["French", "Japanese"]
-
-    def test_preset_overrides_custom(self) -> None:
-        result = get_selected_tasks("Asian Languages", ["French", "German"])
-        assert result == TASK_PRESETS["Asian Languages"]
-
-    def test_none_preset_empty_custom_returns_empty(self) -> None:
-        result = get_selected_tasks(None, [])
-        assert result == []
 
 
 class TestFormatTimestamp:
@@ -235,6 +182,13 @@ class TestLoadAndPreprocessAudio:
         upload.getvalue.return_value = path.read_bytes()
         return upload
 
+    def test_loads_wav(self) -> None:
+        audio_file = self._make_upload(AUDIO_DIR / "sample_10s.wav")
+        wav, duration = load_and_preprocess_audio(audio_file)
+        assert isinstance(wav, torch.Tensor)
+        assert wav.shape[0] == 1
+        assert duration > 0
+
     def test_loads_mp3(self) -> None:
         audio_file = self._make_upload(AUDIO_DIR / "sample_10s.mp3")
         wav, duration = load_and_preprocess_audio(audio_file)
@@ -321,33 +275,25 @@ class TestCheckSafety:
 
     def test_safe_content(self) -> None:
         model, tokenizer = self._make_mocks([[5.0, -5.0]])
-        is_toxic, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
-            "safe text", model, tokenizer
-        )
+        is_toxic, score = check_safety("safe text", model, tokenizer)
         assert is_toxic is False
         assert score < 0.5
 
     def test_toxic_content(self) -> None:
         model, tokenizer = self._make_mocks([[-5.0, 5.0]])
-        is_toxic, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
-            "toxic text", model, tokenizer
-        )
+        is_toxic, score = check_safety("toxic text", model, tokenizer)
         assert is_toxic is True
         assert score > 0.5
 
     def test_boundary_is_not_toxic(self) -> None:
         model, tokenizer = self._make_mocks([[0.0, 0.0]])
-        is_toxic, score = check_safety.__wrapped__(  # type: ignore[attr-defined]
-            "text", model, tokenizer
-        )
+        is_toxic, score = check_safety("text", model, tokenizer)
         assert score == 0.5
         assert is_toxic is False
 
     def test_tokenizer_called_with_correct_args(self) -> None:
         model, tokenizer = self._make_mocks([[5.0, -5.0]])
-        check_safety.__wrapped__(  # type: ignore[attr-defined]
-            "hello world", model, tokenizer
-        )
+        check_safety("hello world", model, tokenizer)
         tokenizer.assert_called_once_with(
             ["hello world"], padding=True, truncation=True, return_tensors="pt"
         )
@@ -359,7 +305,7 @@ class TestTranscribeAudio:
         model.generate.return_value = MagicMock(text="transcribed text")
         wav = torch.zeros(1, 16000)
 
-        transcript, _ = transcribe_audio(wav, "test prompt", model)
+        transcript = transcribe_audio(wav, "test prompt", model)
 
         model.generate.assert_called_once()
         call_kwargs = model.generate.call_args[1]
@@ -379,75 +325,75 @@ class TestTranscribeAudio:
         assert isinstance(audio, np.ndarray)
         assert audio.shape == (16000,)
 
-    def test_returns_elapsed_time(self) -> None:
-        model = MagicMock()
-        model.generate.return_value = MagicMock(text="text")
-        wav = torch.zeros(1, 16000)
-
-        _, elapsed = transcribe_audio(wav, "prompt", model)
-
-        assert isinstance(elapsed, float)
-        assert elapsed >= 0
-
 
 class TestRunPipeline:
+    def setup_method(self) -> None:
+        self._segments_patcher = patch(
+            "streamlit_app.get_speech_segments",
+            return_value=[{"start": 0.0, "end": 1.0}],
+        )
+        self._segments_patcher.start()
+
+    def teardown_method(self) -> None:
+        self._segments_patcher.stop()
+
     def _make_mocks(
         self,
-    ) -> tuple[MagicMock, MagicMock, MagicMock]:
+    ) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
         model = MagicMock()
         model.generate.return_value = MagicMock(text="decoded text")
         guardian_tokenizer = MagicMock()
         guardian_tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
         guardian_model = MagicMock()
         guardian_model.return_value.logits = torch.tensor([[5.0, -5.0]])
-        return model, guardian_model, guardian_tokenizer
+        vad_model = MagicMock()
+        return model, vad_model, guardian_model, guardian_tokenizer
 
     def test_returns_dict_keyed_by_task(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
         tasks = ["Transcribe", "French"]
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, tasks, model, guardian_model, guardian_tokenizer
+            wav, tasks, model, vad_model, guardian_model, guardian_tokenizer
         )
 
         assert set(results.keys()) == {"Transcribe", "French"}
 
-    def test_each_result_has_transcript_and_duration(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+    def test_each_result_has_transcript(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
+            vad_model,
             guardian_model,
             guardian_tokenizer,
         )
 
-        result = results["Transcribe"]
-        assert "transcript" in result
-        assert "eval_duration" in result
-        assert "num_words" in result
+        assert "transcript" in results["Transcribe"]
 
     def test_empty_tasks_returns_empty_dict(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, [], model, guardian_model, guardian_tokenizer
+            wav, [], model, vad_model, guardian_model, guardian_tokenizer
         )
 
         assert results == {}
 
     def test_uses_correct_prompt_per_task(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe", "French"],
             model,
+            vad_model,
             guardian_model,
             guardian_tokenizer,
         )
@@ -458,24 +404,25 @@ class TestRunPipeline:
         assert calls[1][1]["prompt"] == PROMPT_CHOICES["French"]
 
     def test_preserves_task_order(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
         tasks = ["Japanese", "Transcribe", "German"]
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, tasks, model, guardian_model, guardian_tokenizer
+            wav, tasks, model, vad_model, guardian_model, guardian_tokenizer
         )
 
         assert list(results.keys()) == tasks
 
     def test_each_result_has_safety_fields(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
+            vad_model,
             guardian_model,
             guardian_tokenizer,
         )
@@ -486,7 +433,7 @@ class TestRunPipeline:
         assert result["is_toxic"] is False
 
     def test_toxic_content_flagged(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         guardian_model.return_value.logits = torch.tensor([[-5.0, 5.0]])
         wav = torch.zeros(1, 16000)
 
@@ -494,6 +441,7 @@ class TestRunPipeline:
             wav,
             ["Transcribe"],
             model,
+            vad_model,
             guardian_model,
             guardian_tokenizer,
         )
@@ -503,13 +451,14 @@ class TestRunPipeline:
         assert result["toxicity_score"] > 0.5
 
     def test_safety_check_receives_transcript(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe"],
             model,
+            vad_model,
             guardian_model,
             guardian_tokenizer,
         )
@@ -519,11 +468,11 @@ class TestRunPipeline:
         )
 
     def test_translation_tasks_skip_safety_check(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav, ["French"], model, guardian_model, guardian_tokenizer
+            wav, ["French"], model, vad_model, guardian_model, guardian_tokenizer
         )
 
         result = results["French"]
@@ -532,13 +481,14 @@ class TestRunPipeline:
         guardian_tokenizer.assert_not_called()
 
     def test_mixed_tasks_safety_only_on_transcribe(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 16000)
 
         results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
             wav,
             ["Transcribe", "French"],
             model,
+            vad_model,
             guardian_model,
             guardian_tokenizer,
         )
@@ -548,9 +498,8 @@ class TestRunPipeline:
         assert "is_toxic" not in results["French"]
         assert "toxicity_score" not in results["French"]
 
-    def test_segmented_transcript_has_timestamps(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        vad_model = MagicMock()
+    def test_multi_segment_transcript_has_timestamps(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 48000)  # 3 seconds
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
 
@@ -559,11 +508,9 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
+                vad_model,
                 guardian_model,
                 guardian_tokenizer,
-                None,
-                vad_model,
-                True,
             )
 
         transcript = results["Transcribe"]["transcript"]
@@ -571,52 +518,8 @@ class TestRunPipeline:
         assert "[0:01 - 0:03]" in transcript
         assert "\n" in transcript
 
-    def test_segmented_eval_duration_is_rounded_float(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        vad_model = MagicMock()
-        wav = torch.zeros(1, 48000)
-        segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
-
-        with patch("streamlit_app.get_speech_segments", return_value=segments):
-            results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-                wav,
-                ["Transcribe"],
-                model,
-                guardian_model,
-                guardian_tokenizer,
-                None,
-                vad_model,
-                True,
-            )
-
-        duration = results["Transcribe"]["eval_duration"]
-        assert isinstance(duration, float)
-        assert duration >= 0
-
-    def test_segmented_num_words_excludes_timestamps(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        vad_model = MagicMock()
-        wav = torch.zeros(1, 48000)
-        segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
-
-        with patch("streamlit_app.get_speech_segments", return_value=segments):
-            results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-                wav,
-                ["Transcribe"],
-                model,
-                guardian_model,
-                guardian_tokenizer,
-                None,
-                vad_model,
-                True,
-            )
-
-        # "decoded text" = 2 words per segment, 2 segments = 4 words
-        assert results["Transcribe"]["num_words"] == 4
-
-    def test_segmented_safety_on_joined_text_without_timestamps(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        vad_model = MagicMock()
+    def test_multi_segment_safety_on_joined_text_without_timestamps(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
 
@@ -625,11 +528,9 @@ class TestRunPipeline:
                 wav,
                 ["Transcribe"],
                 model,
+                vad_model,
                 guardian_model,
                 guardian_tokenizer,
-                None,
-                vad_model,
-                True,
             )
 
         # Guardian receives joined text without timestamps
@@ -640,24 +541,19 @@ class TestRunPipeline:
             return_tensors="pt",
         )
 
-    def test_segmented_safety_handles_bracket_in_transcript(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
+    def test_safety_handles_bracket_in_transcript(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         model.generate.return_value = MagicMock(text="see figure [3] here")
-        vad_model = MagicMock()
         wav = torch.zeros(1, 48000)
-        segments = [{"start": 0.0, "end": 3.0}]
 
-        with patch("streamlit_app.get_speech_segments", return_value=segments):
-            run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-                wav,
-                ["Transcribe"],
-                model,
-                guardian_model,
-                guardian_tokenizer,
-                None,
-                vad_model,
-                True,
-            )
+        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            ["Transcribe"],
+            model,
+            vad_model,
+            guardian_model,
+            guardian_tokenizer,
+        )
 
         guardian_tokenizer.assert_called_once_with(
             ["see figure [3] here"],
@@ -666,9 +562,8 @@ class TestRunPipeline:
             return_tensors="pt",
         )
 
-    def test_segmented_translation_skips_safety(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        vad_model = MagicMock()
+    def test_translation_skips_safety(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 48000)
         segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
 
@@ -677,53 +572,13 @@ class TestRunPipeline:
                 wav,
                 ["French"],
                 model,
+                vad_model,
                 guardian_model,
                 guardian_tokenizer,
-                None,
-                vad_model,
-                True,
             )
 
         guardian_tokenizer.assert_not_called()
         assert "is_toxic" not in results["French"]
-
-    def test_pipeline_unchanged_when_segmentation_disabled(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        vad_model = MagicMock()
-        wav = torch.zeros(1, 16000)
-
-        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav,
-            ["Transcribe"],
-            model,
-            guardian_model,
-            guardian_tokenizer,
-            None,
-            vad_model,
-            False,
-        )
-
-        # No timestamps in transcript
-        assert "[" not in results["Transcribe"]["transcript"]
-        assert results["Transcribe"]["transcript"] == "decoded text"
-
-    def test_pipeline_unchanged_when_vad_model_none(self) -> None:
-        model, guardian_model, guardian_tokenizer = self._make_mocks()
-        wav = torch.zeros(1, 16000)
-
-        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav,
-            ["Transcribe"],
-            model,
-            guardian_model,
-            guardian_tokenizer,
-            None,
-            None,
-            True,
-        )
-
-        assert "[" not in results["Transcribe"]["transcript"]
-        assert results["Transcribe"]["transcript"] == "decoded text"
 
 
 class TestRenderResultCard:
@@ -731,8 +586,6 @@ class TestRenderResultCard:
     def test_renders_text(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello",
-            "num_words": 1,
-            "eval_duration": 0.5,
         }
         _render_result_card("Transcribe", result, "test")
         mock_st.text.assert_called_once_with("hello")
@@ -741,8 +594,6 @@ class TestRenderResultCard:
     def test_shows_safe_banner(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello",
-            "num_words": 1,
-            "eval_duration": 0.5,
             "is_toxic": False,
             "toxicity_score": 0.1,
         }
@@ -755,8 +606,6 @@ class TestRenderResultCard:
     def test_shows_toxic_banner(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "bad content",
-            "num_words": 2,
-            "eval_duration": 0.5,
             "is_toxic": True,
             "toxicity_score": 0.9,
         }
@@ -769,8 +618,6 @@ class TestRenderResultCard:
     def test_no_safety_banner_for_translation(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "bonjour",
-            "num_words": 1,
-            "eval_duration": 0.5,
         }
         _render_result_card("French", result, "test")
         mock_st.success.assert_not_called()
@@ -780,8 +627,6 @@ class TestRenderResultCard:
     def test_download_filenames_use_slug(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello world",
-            "num_words": 2,
-            "eval_duration": 0.5,
         }
         _render_result_card("Mandarin Chinese", result, "audio")
         txt_filename = mock_st.download_button.call_args[0][2]
@@ -791,8 +636,6 @@ class TestRenderResultCard:
     def test_download_tooltip_for_transcription(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello",
-            "num_words": 1,
-            "eval_duration": 0.5,
         }
         _render_result_card("Transcribe", result, "test")
         assert mock_st.download_button.call_args[1]["help"] == "Download transcription"
@@ -801,8 +644,6 @@ class TestRenderResultCard:
     def test_download_tooltip_for_translation(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "bonjour",
-            "num_words": 1,
-            "eval_duration": 0.5,
         }
         _render_result_card("French", result, "test")
         assert mock_st.download_button.call_args[1]["help"] == "Download translation"
@@ -811,8 +652,6 @@ class TestRenderResultCard:
     def test_renders_bordered_container(self, mock_st: MagicMock) -> None:
         result = {
             "transcript": "hello",
-            "num_words": 1,
-            "eval_duration": 0.5,
         }
         _render_result_card("Transcribe", result, "test")
         mock_st.container.assert_called_once_with(border=True)

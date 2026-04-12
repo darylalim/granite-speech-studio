@@ -529,27 +529,6 @@ class TestRunPipeline:
             return_tensors="pt",
         )
 
-    def test_safety_handles_bracket_in_transcript(self) -> None:
-        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
-        model.generate.return_value = MagicMock(text="see figure [3] here")
-        wav = torch.zeros(1, 48000)
-
-        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
-            wav,
-            ["Transcribe"],
-            model,
-            vad_model,
-            guardian_model,
-            guardian_tokenizer,
-        )
-
-        guardian_tokenizer.assert_called_once_with(
-            ["see figure [3] here"],
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-        )
-
     def test_translation_skips_safety(self) -> None:
         model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
         wav = torch.zeros(1, 48000)

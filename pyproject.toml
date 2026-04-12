@@ -5,7 +5,6 @@ description = "Speech-to-text and translation pipeline using IBM Granite models 
 requires-python = ">=3.12"
 dependencies = [
     "mlx-audio",
-    "punctuators>=0.0.5",
     "silero-vad",
     "streamlit",
     "torch",

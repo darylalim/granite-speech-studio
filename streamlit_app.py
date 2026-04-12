@@ -1,5 +1,4 @@
 import io
-import time
 import warnings
 from collections.abc import Callable
 from datetime import datetime
@@ -30,20 +29,7 @@ PROMPT_CHOICES = {
     "Mandarin Chinese": "translate the speech to Mandarin Chinese",
     "English": "translate the speech to English",
 }
-SUPPORTED_FORMATS = ["wav", "mp3", "m4a", "ogg", "flac", "webm", "aac"]
-TASK_PRESETS: dict[str, list[str]] = {
-    "All Tasks": list(PROMPT_CHOICES.keys()),
-    "European Languages": [
-        "Transcribe",
-        "French",
-        "German",
-        "Spanish",
-        "Portuguese",
-        "Italian",
-    ],
-    "Asian Languages": ["Transcribe", "Japanese", "Mandarin Chinese"],
-    "Transcribe Only": ["Transcribe"],
-}
+SUPPORTED_FORMATS = ["wav", "flac", "m4a"]
 ENGLISH_TASKS: set[str] = {"Transcribe"}
 SAMPLE_RATE = 16000
 
@@ -90,12 +76,6 @@ def get_speech_segments(
     return segments
 
 
-def get_selected_tasks(preset: str | None, custom: list[str]) -> list[str]:
-    if preset is not None:
-        return TASK_PRESETS[preset]
-    return custom
-
-
 @st.cache_resource(show_spinner=False)
 def load_model(model_id: str) -> Any:
     return _load_stt_model(model_id)
@@ -129,7 +109,6 @@ def load_vad_model() -> torch.nn.Module:
     return load_silero_vad()
 
 
-@torch.inference_mode()
 def check_safety(
     text: str,
     model: AutoModelForSequenceClassification,
@@ -146,12 +125,10 @@ def transcribe_audio(
     wav: torch.Tensor,
     prompt: str,
     model: Any,
-) -> tuple[str, float]:
-    start = time.perf_counter()
+) -> str:
     audio_np = wav.squeeze().numpy()
-    # max_tokens=512 matches previous transformers max_new_tokens limit
     output = model.generate(audio=audio_np, prompt=prompt, max_tokens=512)
-    return output.text, round(time.perf_counter() - start, 2)
+    return output.text
 
 
 @torch.inference_mode()
@@ -159,57 +136,35 @@ def run_pipeline(
     wav: torch.Tensor,
     tasks: list[str],
     model: Any,
+    vad_model: torch.nn.Module,
     guardian_model: AutoModelForSequenceClassification | None = None,
     guardian_tokenizer: AutoTokenizer | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
-    vad_model: torch.nn.Module | None = None,
-    use_segmentation: bool = False,
 ) -> dict[str, dict[str, object]]:
-    segmented = use_segmentation and vad_model is not None
-    segments = (
-        get_speech_segments(wav, vad_model)
-        if segmented and vad_model is not None
-        else None
-    )
+    segments = get_speech_segments(wav, vad_model)
     results: dict[str, dict[str, object]] = {}
     for i, task in enumerate(tasks):
         if on_progress:
             on_progress(i, len(tasks), task)
         prompt = PROMPT_CHOICES[task]
-        if segmented and segments:
-            segment_texts: list[str] = []
-            total_words = 0
-            seg_start_time = time.perf_counter()
-            for seg in segments:
-                start_sample = int(seg["start"] * SAMPLE_RATE)
-                end_sample = int(seg["end"] * SAMPLE_RATE)
-                wav_segment = wav[:, start_sample:end_sample]
-                seg_transcript, _ = transcribe_audio(wav_segment, prompt, model)
-                total_words += len(seg_transcript.split())
-                ts_start = format_timestamp(seg["start"])
-                ts_end = format_timestamp(seg["end"])
-                segment_texts.append(f"[{ts_start} - {ts_end}] {seg_transcript}")
-            transcript = "\n".join(segment_texts)
-            eval_duration = round(time.perf_counter() - seg_start_time, 2)
-            num_words = total_words
-        else:
-            transcript, eval_duration = transcribe_audio(wav, prompt, model)
-            num_words = len(transcript.split())
-        result: dict[str, object] = {
-            "transcript": transcript,
-            "num_words": num_words,
-            "eval_duration": eval_duration,
-        }
+        segment_texts: list[str] = []
+        for seg in segments:
+            start_sample = int(seg["start"] * SAMPLE_RATE)
+            end_sample = int(seg["end"] * SAMPLE_RATE)
+            wav_segment = wav[:, start_sample:end_sample]
+            seg_transcript = transcribe_audio(wav_segment, prompt, model)
+            ts_start = format_timestamp(seg["start"])
+            ts_end = format_timestamp(seg["end"])
+            segment_texts.append(f"[{ts_start} - {ts_end}] {seg_transcript}")
+        transcript = "\n".join(segment_texts)
+        result: dict[str, object] = {"transcript": transcript}
         if (
             task in ENGLISH_TASKS
             and guardian_model is not None
             and guardian_tokenizer is not None
         ):
-            if segmented and segments:
-                safety_text = " ".join(line.split("] ", 1)[1] for line in segment_texts)
-            else:
-                safety_text = transcript
-            is_toxic, toxicity_score = check_safety.__wrapped__(
+            safety_text = " ".join(line.split("] ", 1)[1] for line in segment_texts)
+            is_toxic, toxicity_score = check_safety(
                 safety_text, guardian_model, guardian_tokenizer
             )
             result["is_toxic"] = is_toxic
@@ -252,28 +207,22 @@ def _render_result_card(
 def main() -> None:
     st.set_page_config(
         page_title="Granite Speech Pipeline",
-        page_icon="\U0001f399\ufe0f",
         layout="wide",
     )
 
-    st.title("\U0001f399\ufe0f Granite Speech Pipeline")
+    st.title("Granite Speech Pipeline")
 
-    preset = st.pills(
-        "Preset",
-        options=list(TASK_PRESETS.keys()),
-        default=None,
-    )
-
-    default_tasks = TASK_PRESETS[preset] if preset else []
-    selected_tasks = st.multiselect(
+    tasks = st.pills(
         "Tasks",
         options=list(PROMPT_CHOICES.keys()),
-        default=default_tasks,
+        selection_mode="multi",
+        default=["Transcribe"],
+        label_visibility="collapsed",
     )
 
-    tasks = get_selected_tasks(preset, selected_tasks)
-
-    upload_tab, record_tab = st.tabs(["Upload", "Record"])
+    record_tab, upload_tab = st.tabs(["Record", "Upload"])
+    with record_tab:
+        recorded = st.audio_input("Record audio", label_visibility="collapsed")
     with upload_tab:
         uploaded = st.file_uploader(
             "Upload audio file",
@@ -281,18 +230,10 @@ def main() -> None:
             help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}",
             label_visibility="collapsed",
         )
-    with record_tab:
-        recorded = st.audio_input("Record audio", label_visibility="collapsed")
 
     audio_file = recorded or uploaded
 
-    use_segmentation = st.checkbox("VAD segmentation", value=True)
-
-    input_key = (
-        (audio_file.name, audio_file.size, tuple(tasks), use_segmentation)
-        if audio_file
-        else None
-    )
+    input_key = (audio_file.name, audio_file.size, tuple(tasks)) if audio_file else None
     if input_key != st.session_state.get("_last_input_key"):
         for key in ("results", "result_stem"):
             st.session_state.pop(key, None)
@@ -306,11 +247,9 @@ def main() -> None:
 
     if (
         st.button(
-            "",
+            "Transcribe",
             type="primary",
             disabled=not can_run,
-            icon=":material/play_arrow:",
-            help="Run pipeline",
         )
         and can_run
     ):
@@ -320,11 +259,8 @@ def main() -> None:
                 model = load_model(MODEL_ID)
             wav, audio_duration = load_and_preprocess_audio(audio_file)
 
-            if use_segmentation:
-                with st.spinner("Loading VAD model..."):
-                    vad_model = load_vad_model()
-            else:
-                vad_model = None
+            with st.spinner("Loading VAD model..."):
+                vad_model = load_vad_model()
 
             def update_progress(i: int, total: int, task: str) -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
@@ -341,11 +277,10 @@ def main() -> None:
                 wav,
                 tasks,
                 model,
+                vad_model,
                 guardian_model,
                 guardian_tokenizer,
                 on_progress=update_progress,
-                vad_model=vad_model,
-                use_segmentation=use_segmentation,
             )
             progress.empty()
             st.session_state.results = pipeline_results

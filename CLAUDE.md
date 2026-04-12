@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models via [MLX](https://github.com/Blaizzy/mlx-audio) on Apple Silicon. Supports multi-task pipeline processing with preset task groups. Includes VAD-based audio segmentation and English toxicity detection.
+Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models via [MLX](https://github.com/Blaizzy/mlx-audio) on Apple Silicon. Supports multi-task pipeline processing with automatic VAD-based audio segmentation and English toxicity detection.
 
 ## Setup
 
@@ -54,7 +54,7 @@ uv run streamlit run streamlit_app.py
 - `silero_vad` — runs Silero VAD on waveform, returns `(start, end)` tuples in seconds
 - `get_speech_segments` — post-processes VAD output with buffering and merging
 - `load_vad_model` — cached Silero VAD model loader
-- Pipeline supports optional VAD segmentation with per-segment transcription and timestamped output
+- `run_pipeline` — always segments with VAD, transcribes each segment, emits timestamped output
 
 ### Models
 
@@ -69,21 +69,20 @@ uv run streamlit run streamlit_app.py
 
 ### UI Layout
 
-- **Task selection** — `st.pills` for presets (`TASK_PRESETS` dict) + `st.multiselect` for custom task selection, resolved via `get_selected_tasks`
-- **Audio input** — `st.tabs` with Upload (`st.file_uploader`) and Record (`st.audio_input`), labels hidden via `label_visibility="collapsed"`
-- **Run button** — icon-only `st.button` (`:material/play_arrow:`) with "Run pipeline" tooltip
-- **Segmentation** — `st.checkbox` for VAD segmentation toggle (default on)
+- **Task selection** — `st.pills` with `selection_mode="multi"`, label hidden, `Transcribe` preselected by default
+- **Audio input** — `st.tabs` with Record (`st.audio_input`) first, then Upload (`st.file_uploader`); labels hidden via `label_visibility="collapsed"`
+- **Run button** — `st.button("Transcribe", type="primary")`
 - **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
 - **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
 
 ### Audio Formats
 
-wav, mp3, m4a, ogg, flac, webm, aac
+wav, flac, m4a (lossless-preferred whitelist suited for clinical/medical audio)
 
 ### Performance
 
 - Speech model runs via MLX on Apple Silicon GPU (8-bit quantized, ~2.9GB)
-- Deferred model loading — speech model loads on first pipeline run, not on page load
+- Deferred model loading — speech and VAD models load on first pipeline run, not on page load
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
@@ -103,7 +102,7 @@ wav, mp3, m4a, ogg, flac, webm, aac
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for prompt choices, supported formats, task presets, task selection, audio loading, model loading, guardian model loading, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`, plus segmentation cases in `TestRunPipeline`.
+`tests/test_streamlit_app.py` — unit tests for prompt choices, supported formats, audio loading, model loading, guardian model loading, VAD model loading, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`. `TestRunPipeline` patches `get_speech_segments` via `setup_method` with a default single-segment fixture, and overrides it per-test for multi-segment cases.
 
 ## Resources
 

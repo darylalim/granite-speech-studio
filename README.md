@@ -1,6 +1,6 @@
 # Granite Speech Pipeline
 
-Streamlit web app for speech-to-text and translation using IBM's Granite Speech models via [MLX](https://github.com/Blaizzy/mlx-audio). Requires Apple Silicon. Process audio through multiple tasks simultaneously with preset task groups. Includes VAD-based audio segmentation and English toxicity detection.
+Streamlit web app for speech-to-text and translation using IBM's Granite Speech models via [MLX](https://github.com/Blaizzy/mlx-audio). Requires Apple Silicon. Process audio through multiple tasks simultaneously, with automatic VAD-based segmentation and English toxicity detection.
 
 ## Features
 
@@ -8,9 +8,8 @@ Streamlit web app for speech-to-text and translation using IBM's Granite Speech 
 - **Translation** — French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English
 - **VAD segmentation** — automatic speech detection with timestamped per-segment output
 - **Safety** — automatic toxicity detection on English transcriptions via Granite Guardian HAP 38m
-- **Presets** — All Tasks, European Languages, Asian Languages, Transcribe Only
-- **Custom selection** — pick individual tasks via multiselect
-- **Audio input** — upload files (WAV, MP3, M4A, OGG, FLAC, WebM, AAC) or record from microphone
+- **Task selection** — pick tasks via pills (Transcribe preselected by default)
+- **Audio input** — record from microphone or upload files (WAV, FLAC, M4A)
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
 - **Deferred loading** — models load on first pipeline run for instant page startup
 - **Export** — download per-task transcriptions and translations as text
@@ -29,9 +28,9 @@ uv run streamlit run streamlit_app.py
 
 ## Usage
 
-1. Select a preset or pick individual tasks (transcribe, translate to a language)
-2. Upload an audio file or record from your microphone
-3. Click the play button to process all selected tasks
+1. Pick tasks (transcribe, translate to a language)
+2. Record from your microphone or upload an audio file
+3. Click **Transcribe** to process all selected tasks
 4. View side-by-side results and download as text
 
 ## Development

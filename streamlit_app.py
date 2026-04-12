@@ -147,25 +147,24 @@ def run_pipeline(
         if on_progress:
             on_progress(i, len(tasks), task)
         prompt = PROMPT_CHOICES[task]
-        segment_texts: list[str] = []
+        raw_texts: list[str] = []
+        lines: list[str] = []
         for seg in segments:
             start_sample = int(seg["start"] * SAMPLE_RATE)
             end_sample = int(seg["end"] * SAMPLE_RATE)
-            wav_segment = wav[:, start_sample:end_sample]
-            seg_transcript = transcribe_audio(wav_segment, prompt, model)
+            text = transcribe_audio(wav[:, start_sample:end_sample], prompt, model)
+            raw_texts.append(text)
             ts_start = format_timestamp(seg["start"])
             ts_end = format_timestamp(seg["end"])
-            segment_texts.append(f"[{ts_start} - {ts_end}] {seg_transcript}")
-        transcript = "\n".join(segment_texts)
-        result: dict[str, object] = {"transcript": transcript}
+            lines.append(f"[{ts_start} - {ts_end}] {text}")
+        result: dict[str, object] = {"transcript": "\n".join(lines)}
         if (
             task in ENGLISH_TASKS
             and guardian_model is not None
             and guardian_tokenizer is not None
         ):
-            safety_text = " ".join(line.split("] ", 1)[1] for line in segment_texts)
             is_toxic, toxicity_score = check_safety(
-                safety_text, guardian_model, guardian_tokenizer
+                " ".join(raw_texts), guardian_model, guardian_tokenizer
             )
             result["is_toxic"] = is_toxic
             result["toxicity_score"] = toxicity_score

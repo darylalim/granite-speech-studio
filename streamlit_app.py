@@ -18,20 +18,68 @@ warnings.filterwarnings(
 )
 MODEL_ID = "mlx-community/granite-4.0-1b-speech-8bit"
 GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-38m"
-PROMPT_CHOICES = {
-    "Transcribe": "can you transcribe the speech into a written format?",
-    "French": "translate the speech to French",
-    "German": "translate the speech to German",
-    "Spanish": "translate the speech to Spanish",
-    "Portuguese": "translate the speech to Portuguese",
-    "Italian": "translate the speech to Italian",
-    "Japanese": "translate the speech to Japanese",
-    "Mandarin Chinese": "translate the speech to Mandarin Chinese",
-    "English": "translate the speech to English",
-}
-SUPPORTED_FORMATS = ["wav", "flac", "m4a"]
-ENGLISH_TASKS: set[str] = {"Transcribe"}
+SOURCE_LANGUAGES = [
+    "English",
+    "French",
+    "German",
+    "Spanish",
+    "Portuguese",
+    "Japanese",
+]
+EN_TARGETS = [
+    "French",
+    "German",
+    "Spanish",
+    "Portuguese",
+    "Italian",
+    "Japanese",
+    "Mandarin Chinese",
+]
+TRANSCRIBE_PROMPT = "can you transcribe the speech into a written format?"
+SUPPORTED_FORMATS = [
+    "wav",
+    "flac",
+    "m4a",
+    "mp3",
+    "ogg",
+    "aac",
+    "mp4",
+    "mov",
+    "webm",
+    "mkv",
+]
+VIDEO_FORMATS = {"mp4", "mov", "webm", "mkv"}
 SAMPLE_RATE = 16000
+
+
+def is_video(filename: str) -> bool:
+    return Path(filename).suffix.lower().lstrip(".") in VIDEO_FORMATS
+
+
+def build_tasks(source: str) -> dict[str, str]:
+    tasks: dict[str, str] = {"Transcribe": TRANSCRIBE_PROMPT}
+    targets = EN_TARGETS if source == "English" else ["English"]
+    for target in targets:
+        tasks[target] = f"translate the speech to {target}"
+    return tasks
+
+
+def produces_english(source: str, task: str) -> bool:
+    if task == "Transcribe":
+        return source == "English"
+    return task == "English"
+
+
+def result_title(source: str, task: str) -> str:
+    if task == "Transcribe":
+        return f"Transcribe ({source})"
+    return task
+
+
+def result_slug(source: str, task: str) -> str:
+    if task == "Transcribe":
+        return f"transcribe_{source.lower().replace(' ', '_')}"
+    return task.lower().replace(" ", "_")
 
 
 def format_timestamp(seconds: float) -> str:
@@ -134,19 +182,24 @@ def transcribe_audio(
 @torch.inference_mode()
 def run_pipeline(
     wav: torch.Tensor,
-    tasks: list[str],
+    tasks: dict[str, str],
+    safety_tasks: set[str],
     model: Any,
-    vad_model: torch.nn.Module,
+    vad_model: torch.nn.Module | None = None,
     guardian_model: AutoModelForSequenceClassification | None = None,
     guardian_tokenizer: AutoTokenizer | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    use_segmentation: bool = True,
 ) -> dict[str, dict[str, object]]:
-    segments = get_speech_segments(wav, vad_model)
+    if use_segmentation and vad_model is not None:
+        segments = get_speech_segments(wav, vad_model)
+    else:
+        duration = wav.shape[-1] / SAMPLE_RATE
+        segments = [{"start": 0.0, "end": duration}]
     results: dict[str, dict[str, object]] = {}
-    for i, task in enumerate(tasks):
+    for i, (task, prompt) in enumerate(tasks.items()):
         if on_progress:
             on_progress(i, len(tasks), task)
-        prompt = PROMPT_CHOICES[task]
         raw_texts: list[str] = []
         lines: list[str] = []
         for seg in segments:
@@ -159,7 +212,7 @@ def run_pipeline(
             lines.append(f"[{ts_start} - {ts_end}] {text}")
         result: dict[str, object] = {"transcript": "\n".join(lines)}
         if (
-            task in ENGLISH_TASKS
+            task in safety_tasks
             and guardian_model is not None
             and guardian_tokenizer is not None
         ):
@@ -173,12 +226,16 @@ def run_pipeline(
 
 
 def _render_result_card(
-    task_name: str,
+    source: str,
+    task: str,
     result: dict[str, object],
     stem: str,
 ) -> None:
+    title = result_title(source, task)
+    is_transcription = task == "Transcribe"
+    slug = result_slug(source, task)
     with st.container(border=True):
-        st.subheader(task_name)
+        st.subheader(title)
         st.text(result["transcript"])
         if "is_toxic" in result:
             score = f"score: {result['toxicity_score']:.1%}"
@@ -186,42 +243,31 @@ def _render_result_card(
                 st.warning(f"Toxic content detected ({score})")
             else:
                 st.success(f"Content is safe ({score})")
-        slug = task_name.lower().replace(" ", "_")
         download_help = (
-            "Download transcription"
-            if task_name in ENGLISH_TASKS
-            else "Download translation"
+            "Download transcription" if is_transcription else "Download translation"
         )
         st.download_button(
             "",
             result["transcript"],
             f"{stem}_{slug}.txt",
             "text/plain",
-            key=f"dl_txt_{task_name}",
+            key=f"dl_txt_{source}_{task}",
             icon=":material/download:",
             help=download_help,
         )
 
 
 def main() -> None:
-    st.set_page_config(
-        page_title="Granite Speech Pipeline",
-        layout="wide",
-    )
+    st.set_page_config(page_title="Granite Speech Pipeline")
 
     st.title("Granite Speech Pipeline")
-
-    tasks = st.pills(
-        "Tasks",
-        options=list(PROMPT_CHOICES.keys()),
-        selection_mode="multi",
-        default=["Transcribe"],
-        label_visibility="collapsed",
+    st.markdown(
+        "Transcribe and translate audio and video files with the "
+        "[IBM Granite 4.0 1B Speech model]"
+        "(https://huggingface.co/ibm-granite/granite-4.0-1b-speech)."
     )
 
-    record_tab, upload_tab = st.tabs(["Record", "Upload"])
-    with record_tab:
-        recorded = st.audio_input("Record audio", label_visibility="collapsed")
+    upload_tab, record_tab = st.tabs(["Upload", "Record"])
     with upload_tab:
         uploaded = st.file_uploader(
             "Upload audio file",
@@ -229,42 +275,108 @@ def main() -> None:
             help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}",
             label_visibility="collapsed",
         )
+    with record_tab:
+        recorded = st.audio_input("Record audio", label_visibility="collapsed")
 
-    audio_file = recorded or uploaded
+    audio_file = uploaded or recorded
 
-    input_key = (audio_file.name, audio_file.size, tuple(tasks)) if audio_file else None
+    if audio_file:
+        if is_video(audio_file.name):
+            st.video(audio_file)
+        else:
+            st.audio(audio_file)
+        st.caption(audio_file.name if uploaded else "Recorded audio")
+
+    source_value = st.segmented_control(
+        "Source language",
+        options=SOURCE_LANGUAGES,
+        default="English",
+        label_visibility="collapsed",
+    )
+    source: str = source_value if isinstance(source_value, str) else "English"
+
+    available_tasks = build_tasks(source)
+    selected_value = st.pills(
+        "Tasks",
+        options=list(available_tasks.keys()),
+        selection_mode="multi",
+        default=["Transcribe"],
+        label_visibility="collapsed",
+        key=f"tasks_{source}",
+    )
+    selected_tasks: list[str] = (
+        [t for t in selected_value if isinstance(t, str)]
+        if isinstance(selected_value, list)
+        else []
+    )
+
+    label_col, toggle_col = st.columns([15, 1], vertical_alignment="center")
+    with label_col:
+        st.markdown(
+            "VAD segmentation",
+            help=(
+                "Splits audio into speech segments with timestamps using "
+                "Silero VAD. Disable for short utterances or to process "
+                "the whole audio in one pass."
+            ),
+        )
+    with toggle_col:
+        use_segmentation = st.toggle(
+            "VAD segmentation",
+            value=True,
+            label_visibility="collapsed",
+            key="use_segmentation",
+        )
+
+    input_key = (
+        (
+            audio_file.name,
+            audio_file.size,
+            source,
+            tuple(selected_tasks),
+            use_segmentation,
+        )
+        if audio_file
+        else None
+    )
     if input_key != st.session_state.get("_last_input_key"):
-        for key in ("results", "result_stem"):
+        for key in ("results", "result_stem", "result_source"):
             st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 
-    if audio_file:
-        st.audio(audio_file)
-        st.caption("Recorded audio" if recorded else audio_file.name)
+    can_run = audio_file is not None and len(selected_tasks) > 0
 
-    can_run = audio_file is not None and len(tasks) > 0
-
-    if (
-        st.button(
+    _, btn_col = st.columns([4, 1])
+    with btn_col:
+        run_clicked = st.button(
             "Transcribe",
             type="primary",
             disabled=not can_run,
+            width="stretch",
         )
-        and can_run
-    ):
+
+    if run_clicked and can_run:
         progress = st.progress(0, text="Starting pipeline...")
         try:
             with st.spinner("Loading speech model..."):
                 model = load_model(MODEL_ID)
             wav, audio_duration = load_and_preprocess_audio(audio_file)
 
-            with st.spinner("Loading VAD model..."):
-                vad_model = load_vad_model()
+            if use_segmentation:
+                with st.spinner("Loading VAD model..."):
+                    vad_model = load_vad_model()
+            else:
+                vad_model = None
 
             def update_progress(i: int, total: int, task: str) -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
 
-            if ENGLISH_TASKS.intersection(tasks):
+            tasks_to_run = {name: available_tasks[name] for name in selected_tasks}
+            safety_tasks = {
+                name for name in selected_tasks if produces_english(source, name)
+            }
+
+            if safety_tasks:
                 with st.spinner("Loading safety model..."):
                     guardian_model, guardian_tokenizer = load_guardian_model(
                         GUARDIAN_MODEL_ID
@@ -274,12 +386,14 @@ def main() -> None:
 
             pipeline_results = run_pipeline(
                 wav,
-                tasks,
+                tasks_to_run,
+                safety_tasks,
                 model,
                 vad_model,
                 guardian_model,
                 guardian_tokenizer,
                 on_progress=update_progress,
+                use_segmentation=use_segmentation,
             )
             progress.empty()
             st.session_state.results = pipeline_results
@@ -287,6 +401,7 @@ def main() -> None:
             if audio_file.name == "audio.wav":
                 stem = datetime.now().strftime("recording_%Y%m%d_%H%M%S")
             st.session_state.result_stem = stem
+            st.session_state.result_source = source
         except RuntimeError as e:
             st.error(str(e))
             return
@@ -298,6 +413,7 @@ def main() -> None:
     if "results" in st.session_state:
         results = st.session_state.results
         stem = st.session_state.result_stem
+        source_used = st.session_state.result_source
         task_names = list(results.keys())
 
         num_cols = min(len(task_names), 3)
@@ -306,7 +422,9 @@ def main() -> None:
             cols = st.columns(num_cols)
             for col, task_name in zip(cols, row_tasks):
                 with col:
-                    _render_result_card(task_name, results[task_name], stem)
+                    _render_result_card(
+                        source_used, task_name, results[task_name], stem
+                    )
 
 
 if __name__ == "__main__":

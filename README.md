@@ -1,15 +1,16 @@
 # Granite Speech Pipeline
 
-Streamlit web app for speech-to-text and translation using IBM's Granite Speech models via [MLX](https://github.com/Blaizzy/mlx-audio). Requires Apple Silicon. Process audio through multiple tasks simultaneously, with automatic VAD-based segmentation and English toxicity detection.
+Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX.
 
 ## Features
 
 - **Pipeline processing** — run multiple transcription and translation tasks on the same audio
-- **Translation** — French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English
-- **VAD segmentation** — automatic speech detection with timestamped per-segment output
-- **Safety** — automatic toxicity detection on English transcriptions via Granite Guardian HAP 38m
-- **Task selection** — pick tasks via pills (Transcribe preselected by default)
-- **Audio input** — record from microphone or upload files (WAV, FLAC, M4A)
+- **Transcription** — English, French, German, Spanish, Portuguese, Japanese
+- **Translation** — English ↔ French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese (Italian and Mandarin: English source only)
+- **VAD segmentation** — automatic speech detection with timestamped per-segment output (togglable; disable to process whole audio in one pass)
+- **Safety** — automatic toxicity detection on English output (transcription or translation to English) via Granite Guardian HAP 38m
+- **Source language** — pick once; valid tasks update accordingly
+- **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
 - **Deferred loading** — models load on first pipeline run for instant page startup
 - **Export** — download per-task transcriptions and translations as text
@@ -28,10 +29,12 @@ uv run streamlit run streamlit_app.py
 
 ## Usage
 
-1. Pick tasks (transcribe, translate to a language)
-2. Record from your microphone or upload an audio file
-3. Click **Transcribe** to process all selected tasks
-4. View side-by-side results and download as text
+1. Upload an audio or video file, or record from your microphone
+2. Pick the source language of your audio
+3. Pick tasks (transcribe, translate to a language)
+4. Optionally toggle **VAD segmentation** (on by default)
+5. Click **Transcribe** to process all selected tasks
+6. View side-by-side results and download as text
 
 ## Development
 

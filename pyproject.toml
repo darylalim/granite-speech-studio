@@ -1,7 +1,7 @@
 [project]
 name = "granite-speech-pipeline"
 version = "0.7.1"
-description = "Speech-to-text and translation pipeline using IBM Granite models on Apple Silicon via MLX"
+description = "Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX."
 requires-python = ">=3.12"
 dependencies = [
     "mlx-audio",

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Streamlit web app for speech-to-text and translation using IBM's [Granite Speech](https://huggingface.co/collections/ibm-granite/granite-speech) models via [MLX](https://github.com/Blaizzy/mlx-audio) on Apple Silicon. Supports multi-task pipeline processing with automatic VAD-based audio segmentation and English toxicity detection.
+Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX. Streamlit web app with multi-task pipeline processing, VAD-based audio segmentation, and English toxicity detection.
 
 ## Setup
 
@@ -50,11 +50,16 @@ uv run streamlit run streamlit_app.py
 
 ### Functions
 
+- `build_tasks` — returns ordered `{task_name: prompt}` dict for a given source language
+- `produces_english` — predicate: does `(source, task)` yield English output (drives safety check)
+- `result_title` — display title for result cards (transcription shows source; translation shows target)
+- `result_slug` — filename slug for downloads (transcription includes source; translation uses target)
+- `is_video` — predicate by extension, drives `st.video` vs `st.audio` preview
 - `format_timestamp` — formats seconds to `M:SS` or `H:MM:SS`
 - `silero_vad` — runs Silero VAD on waveform, returns `(start, end)` tuples in seconds
 - `get_speech_segments` — post-processes VAD output with buffering and merging
 - `load_vad_model` — cached Silero VAD model loader
-- `run_pipeline` — always segments with VAD, transcribes each segment, emits timestamped output
+- `run_pipeline` — takes `tasks: dict[str, str]` (task→prompt), `safety_tasks: set[str]`, and `use_segmentation: bool`; when segmentation is on, runs VAD then transcribes each segment; when off, treats the full audio as a single segment. Emits timestamped output and runs safety check only for tasks in `safety_tasks`.
 
 ### Models
 
@@ -64,20 +69,25 @@ uv run streamlit run streamlit_app.py
 
 ### Languages
 
-- Transcription: English
-- Translation: French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese, English
+- Source languages: English, French, German, Spanish, Portuguese, Japanese (model-supported ASR set)
+- Transcription: available for any source language
+- Translation: English source → French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese; non-English source → English only (matches model's En↔X capability)
 
-### UI Layout
+### UI Layout (top to bottom)
 
-- **Task selection** — `st.pills` with `selection_mode="multi"`, label hidden, `Transcribe` preselected by default
-- **Audio input** — `st.tabs` with Record (`st.audio_input`) first, then Upload (`st.file_uploader`); labels hidden via `label_visibility="collapsed"`
-- **Run button** — `st.button("Transcribe", type="primary")`
-- **Results** — pipeline results persisted in `st.session_state`, displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
-- **Safety** — transcription results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score (English only)
+- **Title + description** — `st.title` plus `st.markdown` linking to the IBM Granite 4.0 1B Speech model card
+- **Audio input** — `st.tabs` with Upload (`st.file_uploader`) first, then Record (`st.audio_input`); labels hidden via `label_visibility="collapsed"`
+- **Audio/video preview** — `st.video` for video containers, `st.audio` otherwise; selected via `is_video(filename)`. `st.caption` shows filename or "Recorded audio".
+- **Source language** — `st.segmented_control` (single-select), `English` default; drives the task option list via `build_tasks(source)`
+- **Task selection** — `st.pills` with `selection_mode="multi"`, label hidden, `Transcribe` preselected; widget keyed by source so options reset when source changes
+- **VAD segmentation** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("VAD segmentation", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, VAD model load is skipped and `run_pipeline` treats the full audio as a single segment. Part of `_last_input_key` so toggling invalidates cached results.
+- **Run button** — `st.button("Transcribe", type="primary", width="stretch")` placed in a right-aligned column via `st.columns([4, 1])`; disabled until audio is loaded and at least one task is selected
+- **Results** — pipeline results, stem, and source captured at run time in `st.session_state`; displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
+- **Safety** — results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score whenever output is English (English source transcription, or X→English translation)
 
 ### Audio Formats
 
-wav, flac, m4a (lossless-preferred whitelist suited for clinical/medical audio)
+Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted via torchcodec): mp4, mov, webm, mkv. `VIDEO_FORMATS` set drives conditional preview (`st.video` vs `st.audio`). Upload size limit raised to 500 MB in `.streamlit/config.toml`.
 
 ### Performance
 
@@ -102,7 +112,7 @@ wav, flac, m4a (lossless-preferred whitelist suited for clinical/medical audio)
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for prompt choices, supported formats, audio loading, model loading, guardian model loading, VAD model loading, safety checking, transcription, pipeline execution, result card rendering, and error handling. `TestFormatTimestamp`, `TestSileroVad`, `TestGetSpeechSegments`, `TestLoadVadModel`. `TestRunPipeline` patches `get_speech_segments` via `setup_method` with a default single-segment fixture, and overrides it per-test for multi-segment cases.
+`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `produces_english`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `silero_vad`, `get_speech_segments`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off), and result card rendering. `TestRunPipeline` patches `get_speech_segments` via `setup_method` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
 
 ## Resources
 

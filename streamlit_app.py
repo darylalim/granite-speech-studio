@@ -397,8 +397,9 @@ def main() -> None:
             )
             progress.empty()
             st.session_state.results = pipeline_results
-            stem = Path(audio_file.name).stem
-            if audio_file.name == "audio.wav":
+            if uploaded:
+                stem = Path(audio_file.name).stem
+            else:
                 stem = datetime.now().strftime("recording_%Y%m%d_%H%M%S")
             st.session_state.result_stem = stem
             st.session_state.result_source = source

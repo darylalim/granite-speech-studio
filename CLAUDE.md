@@ -96,7 +96,6 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
-- `time.perf_counter()` for timing
 - Guardian model runs on CPU with default dtype (38M params, fast inference)
 - Silero VAD model runs on CPU (~3MB)
 - `max_tokens=512` per segment (prevents truncation on long speech)

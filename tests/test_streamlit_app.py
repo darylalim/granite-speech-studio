@@ -302,17 +302,17 @@ class TestLoadAndPreprocessAudio:
 
     def test_loads_wav(self) -> None:
         audio_file = self._make_upload(AUDIO_DIR / "sample_10s.wav")
-        wav, duration = load_and_preprocess_audio(audio_file)
+        wav = load_and_preprocess_audio(audio_file)
         assert isinstance(wav, torch.Tensor)
         assert wav.shape[0] == 1
-        assert duration > 0
+        assert wav.shape[1] > 0
 
     def test_loads_mp4_video(self) -> None:
         audio_file = self._make_upload(AUDIO_DIR / "sample_10s_video.mp4")
-        wav, duration = load_and_preprocess_audio(audio_file)
+        wav = load_and_preprocess_audio(audio_file)
         assert isinstance(wav, torch.Tensor)
         assert wav.shape[0] == 1
-        assert duration > 0
+        assert wav.shape[1] > 0
 
     def test_invalid_audio_raises_runtime_error(self) -> None:
         upload = MagicMock()

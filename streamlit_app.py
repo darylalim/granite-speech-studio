@@ -129,18 +129,17 @@ def load_model(model_id: str) -> Any:
     return _load_stt_model(model_id)
 
 
-def load_and_preprocess_audio(audio_file: UploadedFile) -> tuple[torch.Tensor, float]:
+def load_and_preprocess_audio(audio_file: UploadedFile) -> torch.Tensor:
     try:
         wav, sr = torchaudio.load(io.BytesIO(audio_file.getvalue()))
     except Exception as e:
         raise RuntimeError(f"Failed to load audio file: {e}") from e
 
-    duration = wav.shape[1] / sr
     if wav.shape[0] > 1:
         wav = wav.mean(dim=0, keepdim=True)
     if sr != SAMPLE_RATE:
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
-    return wav, duration
+    return wav
 
 
 @st.cache_resource(show_spinner=False)
@@ -361,7 +360,7 @@ def main() -> None:
         try:
             with st.spinner("Loading speech model..."):
                 model = load_model(MODEL_ID)
-            wav, audio_duration = load_and_preprocess_audio(audio_file)
+            wav = load_and_preprocess_audio(audio_file)
 
             if use_segmentation:
                 with st.spinner("Loading VAD model..."):

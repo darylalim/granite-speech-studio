@@ -191,7 +191,8 @@ def run_pipeline(
     on_progress: Callable[[int, int, str], None] | None = None,
     use_segmentation: bool = True,
 ) -> dict[str, dict[str, object]]:
-    if use_segmentation and vad_model is not None:
+    if use_segmentation:
+        assert vad_model is not None, "vad_model required when use_segmentation=True"
         segments = get_speech_segments(wav, vad_model)
     else:
         duration = wav.shape[-1] / SAMPLE_RATE

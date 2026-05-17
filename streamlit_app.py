@@ -12,6 +12,7 @@ import torchaudio
 from mlx_audio.stt.utils import load_model as _load_stt_model
 from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+from torchcodec.decoders import AudioDecoder
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 warnings.filterwarnings(
@@ -51,6 +52,7 @@ SUPPORTED_FORMATS = [
 ]
 VIDEO_FORMATS = {"mp4", "mov", "webm", "mkv"}
 SAMPLE_RATE = 16000
+MAX_VAD_OFF_DURATION_S = 300
 TOXICITY_THRESHOLD = 0.5
 TOXICITY_SCORE_PRECISION = 4
 
@@ -186,6 +188,17 @@ def load_and_preprocess_audio(audio_file: UploadedFile) -> torch.Tensor:
     if sr != SAMPLE_RATE:
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
     return wav
+
+
+def audio_duration_seconds(audio_file: UploadedFile) -> float | None:
+    try:
+        decoder = AudioDecoder(audio_file.getvalue())
+        duration = decoder.metadata.duration_seconds
+    except (RuntimeError, ValueError, OSError):
+        return None
+    if duration is None or duration <= 0:
+        return None
+    return float(duration)
 
 
 @st.cache_resource(show_spinner=False)
@@ -456,6 +469,21 @@ def main() -> None:
         key="use_segmentation",
     )
 
+    vad_off_too_long = False
+    if audio_file is not None and not use_segmentation:
+        # Cache per-file: getvalue() copies the full byte buffer each rerun.
+        duration_key = f"_duration_{audio_file.name}_{audio_file.size}"
+        if duration_key not in st.session_state:
+            st.session_state[duration_key] = audio_duration_seconds(audio_file)
+        duration = st.session_state[duration_key]
+        if duration is not None and duration > MAX_VAD_OFF_DURATION_S:
+            vad_off_too_long = True
+            st.warning(
+                f"Enable VAD segmentation: audio is longer than "
+                f"{MAX_VAD_OFF_DURATION_S // 60} minutes, which exceeds the "
+                "model's per-call audio limit."
+            )
+
     st.markdown(
         "Keywords",
         help=(
@@ -501,7 +529,11 @@ def main() -> None:
             st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 
-    can_run = audio_file is not None and len(selected_tasks) > 0
+    can_run = (
+        audio_file is not None
+        and len(selected_tasks) > 0
+        and not vad_off_too_long
+    )
 
     _, btn_col = st.columns([4, 1])
     with btn_col:

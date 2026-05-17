@@ -8,8 +8,8 @@ Transcribe and translate audio and video files using the IBM Granite 4.0 1B Spee
 - **Transcription** — English, French, German, Spanish, Portuguese, Japanese
 - **Translation** — English ↔ French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese (Italian and Mandarin: English source only)
 - **Keywords** — bias recognition toward up to 15 user-provided terms (proper nouns, acronyms, jargon)
-- **VAD segmentation** — automatic speech detection with timestamped per-segment output (togglable; disable to process whole audio in one pass)
-- **Toxicity check** — togglable (on by default); surfaces toxicity score on English output (transcription or translation to English) via Granite Guardian HAP 125m
+- **VAD segmentation** — automatic speech detection with timestamped per-segment output (togglable; disable to process whole audio in one pass; auto-required for audio over 5 minutes)
+- **Toxicity check** — togglable (on by default); surfaces the worst per-segment toxicity score on English output (transcription or translation to English) via Granite Guardian HAP 125m
 - **Source language** — pick once; valid tasks update accordingly
 - **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)

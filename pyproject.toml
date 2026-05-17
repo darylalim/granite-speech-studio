@@ -1,6 +1,6 @@
 [project]
 name = "granite-speech-pipeline"
-version = "0.8.0"
+version = "0.9.0"
 description = "Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX."
 requires-python = ">=3.12"
 dependencies = [

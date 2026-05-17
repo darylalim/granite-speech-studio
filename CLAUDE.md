@@ -33,7 +33,7 @@ uv run streamlit run streamlit_app.py
 - `transformers` — guardian model loading (toxicity detection)
 - `torch` — tensor operations (VAD, guardian model)
 - `torchaudio` — audio loading and resampling (for VAD preprocessing)
-- `torchcodec` — audio decoding backend for torchaudio
+- `torchcodec` — audio decoding backend for torchaudio; also used directly via `AudioDecoder` for header-only duration reads
 - `silero-vad` — Voice Activity Detection for audio segmentation
 - `streamlit` — web user interface
 - `ruff` — linting/formatting (dev)
@@ -58,13 +58,16 @@ uv run streamlit run streamlit_app.py
 - `result_slug` — filename slug for downloads (transcription includes source; translation uses target)
 - `is_video` — predicate by extension, drives `st.video` vs `st.audio` preview
 - `format_timestamp` — formats seconds to `M:SS` or `H:MM:SS`
+- `audio_duration_seconds` — returns clip duration via `torchcodec.decoders.AudioDecoder.metadata.duration_seconds` (header read only, no full decode); returns `None` if the format can't be parsed. Used to gate the Run button when VAD is off on long audio (threshold `MAX_VAD_OFF_DURATION_S = 300`).
 - `_detect_cot_target` — returns the single translation target when tasks include `Transcribe` + exactly one translation; else `None`
 - `_cot_prompt` — builds the CoT-AST prompt: `"Can you transcribe the speech, and then translate it to {target}?"`
 - `_parse_cot_output` — splits CoT model output into `(transcription, translation)` via `[Transcription]` / `[Translation]` tags; returns `("", "")` on parse failure
+- `_aggregate_segment_safety` — calls `check_safety` per non-empty segment text and returns `(is_toxic, max_score)`; aggregation is max so any toxic segment flags the whole transcript
+- `_row_sizes` — splits `n` result cards into rows of at most 3 as evenly as possible (4 → `[2, 2]`, 7 → `[3, 2, 2]`); used by the result grid in `main()` to avoid orphan cards
 - `silero_vad` — runs Silero VAD on waveform, returns `(start, end)` tuples in seconds
 - `get_speech_segments` — post-processes VAD output with buffering and merging
 - `load_vad_model` — cached Silero VAD model loader
-- `run_pipeline` — takes `tasks: dict[str, str]` (task→prompt), `safety_tasks: set[str]`, and `use_segmentation: bool`; when segmentation is on, runs VAD then transcribes each segment; when off, treats the full audio as a single segment. When `tasks` includes `Transcribe` + exactly one translation target, automatically uses CoT-AST prompting (one inference per segment, parsed into both result cards; falls back to direct AST on parse failure). Emits timestamped output and runs safety check only for tasks in `safety_tasks`.
+- `run_pipeline` — takes `tasks: dict[str, str]` (task→prompt), `safety_tasks: set[str]`, and `use_segmentation: bool`; when segmentation is on, runs VAD then transcribes each segment; when off, treats the full audio as a single segment. When `tasks` includes `Transcribe` + exactly one translation target, automatically uses CoT-AST prompting (one inference per segment, parsed into both result cards; on parse failure re-runs a direct ASR call for the Transcribe card so untagged model output isn't mistakenly used as the transcription, and the translation iteration then makes its own direct AST call). Emits timestamped output and runs the safety check per segment for tasks in `safety_tasks` (empty segments skipped); the worst per-segment score is reported on the result card so long transcripts aren't silently truncated by the guardian's 512-token cap.
 
 ### Models
 
@@ -85,7 +88,7 @@ uv run streamlit run streamlit_app.py
 - **Audio/video preview** — `st.video` for video containers, `st.audio` otherwise; selected via `is_video(filename)`. `st.caption` shows filename or "Recorded audio".
 - **Source language** — `st.segmented_control` (single-select), `English` default; drives the task option list via `build_tasks(source)`
 - **Task selection** — `st.pills` with `selection_mode="multi"`, label hidden, `Transcribe` preselected; widget keyed by source so options reset when source changes
-- **VAD segmentation** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("VAD segmentation", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, VAD model load is skipped and `run_pipeline` treats the full audio as a single segment. Part of `_last_input_key` so toggling invalidates cached results.
+- **VAD segmentation** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("VAD segmentation", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, VAD model load is skipped and `run_pipeline` treats the full audio as a single segment. Part of `_last_input_key` so toggling invalidates cached results. When VAD is off and the audio is longer than `MAX_VAD_OFF_DURATION_S` (5 min), an `st.warning` is rendered and the Run button is disabled — the model's context window can't fit a longer clip in one inference.
 - **Keywords** — `st.markdown("Keywords", help=...)` label followed by `st.multiselect` with `accept_new_options=True`, `max_selections=15`, `label_visibility="collapsed"`, and placeholder `"Add keywords..."`. When non-empty, `apply_keywords` appends `Keywords: kw1, kw2, ...` to every prompt before inference. Part of `_last_input_key` (as `tuple(sorted(keywords))`) so changes invalidate cached results.
 - **Toxicity check** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("Toxicity check", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, `compute_safety_tasks` returns an empty set so guardian model load and per-task safety check are both skipped. Part of `_last_input_key` so toggling invalidates cached results.
 - **Run button** — `st.button("Transcribe", type="primary", width="stretch")` placed in a right-aligned column via `st.columns([4, 1])`; disabled until audio is loaded and at least one task is selected
@@ -103,6 +106,7 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
+- `audio_duration_seconds` cached in `st.session_state` keyed by `(name, size)` so the upload buffer isn't re-copied on every rerun (matters for 500 MB uploads)
 - Guardian model runs on CPU with default dtype (125M params)
 - Silero VAD model runs on CPU (~3MB)
 - `max_tokens=512` per segment (prevents truncation on long speech)
@@ -118,7 +122,7 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `apply_keywords`, `produces_english`, `compute_safety_tasks`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `_detect_cot_target`, `_cot_prompt`, `_parse_cot_output`, `silero_vad`, `get_speech_segments`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off, CoT-AST optimization with parse fallback), and result card rendering. `TestRunPipeline` patches `get_speech_segments` via `setup_method` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
+`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `apply_keywords`, `produces_english`, `compute_safety_tasks`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `_detect_cot_target`, `_cot_prompt`, `_parse_cot_output`, `silero_vad`, `get_speech_segments`, `audio_duration_seconds`, `_aggregate_segment_safety`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off, CoT-AST optimization with parse fallback, per-segment safety with max aggregation), and result card rendering. Repetitive cases use `pytest.mark.parametrize`. Shared `pipeline_mocks` fixture supplies the four pipeline mocks via a `NamedTuple` so tests can unpack with `*pipeline_mocks`. `TestRunPipeline` patches `get_speech_segments` via an autouse `pytest.fixture` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Decorator wrappers (`@st.cache_resource`, `@torch.inference_mode`) are bypassed via module-level `_load_model`, `_load_guardian_model`, `_load_vad_model`, `_run_pipeline` aliases pointing at `.__wrapped__`. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
 
 ## Resources
 

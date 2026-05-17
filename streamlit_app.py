@@ -270,10 +270,22 @@ def run_pipeline(
                 )
                 if use_cot:
                     transcription, translation = _parse_cot_output(raw)
-                    if not transcription and not translation:
-                        text = raw
+                    if not transcription:
+                        # CoT didn't yield a usable transcription (no tags, or
+                        # only [Translation] was emitted). Re-run with the
+                        # direct ASR prompt so untagged/translation output
+                        # isn't mistakenly displayed as the transcription.
+                        text = transcribe_audio(
+                            wav[:, start_sample:end_sample],
+                            apply_keywords(prompt, keywords),
+                            model,
+                        )
                     else:
                         text = transcription
+                    # Only cache when the model actually produced a
+                    # translation; an empty value would later be served from
+                    # the cache instead of triggering a direct AST call.
+                    if translation:
                         cot_translation_cache[seg_idx] = translation
                 else:
                     text = raw

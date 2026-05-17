@@ -51,6 +51,8 @@ SUPPORTED_FORMATS = [
 ]
 VIDEO_FORMATS = {"mp4", "mov", "webm", "mkv"}
 SAMPLE_RATE = 16000
+TOXICITY_THRESHOLD = 0.5
+TOXICITY_SCORE_PRECISION = 4
 
 
 class PipelineResult(TypedDict):
@@ -203,11 +205,35 @@ def check_safety(
     model: Any,
     tokenizer: Any,
 ) -> tuple[bool, float]:
-    inputs = tokenizer([text], padding=True, truncation=True, return_tensors="pt")
-    logits = model(**inputs).logits
-    probability = torch.softmax(logits, dim=1)[0, 1].item()
-    is_toxic = probability > 0.5
-    return is_toxic, round(probability, 4)
+    # Guardian (RoBERTa) caps at 512 tokens. For inputs longer than that,
+    # chunk into 510-token windows (reserving 2 slots for CLS/SEP) and take
+    # the max — otherwise truncation would silently drop late content.
+    max_content_tokens = 510
+    encoding = tokenizer(
+        text, return_tensors="pt", truncation=False, add_special_tokens=False
+    )
+    input_ids = encoding["input_ids"][0]
+    if len(input_ids) <= max_content_tokens:
+        chunks = [text]
+    else:
+        chunks = [
+            tokenizer.decode(
+                input_ids[i : i + max_content_tokens], skip_special_tokens=True
+            )
+            for i in range(0, len(input_ids), max_content_tokens)
+        ]
+
+    max_probability = 0.0
+    for chunk in chunks:
+        inputs = tokenizer([chunk], padding=True, truncation=True, return_tensors="pt")
+        logits = model(**inputs).logits
+        probability = torch.softmax(logits, dim=1)[0, 1].item()
+        if probability > max_probability:
+            max_probability = probability
+    return (
+        max_probability > TOXICITY_THRESHOLD,
+        round(max_probability, TOXICITY_SCORE_PRECISION),
+    )
 
 
 def transcribe_audio(
@@ -218,6 +244,22 @@ def transcribe_audio(
     audio_np = wav.squeeze().numpy()
     output = model.generate(audio=audio_np, prompt=prompt, max_tokens=512)
     return output.text
+
+
+def _aggregate_segment_safety(
+    texts: list[str], model: Any, tokenizer: Any
+) -> tuple[bool, float]:
+    max_probability = 0.0
+    for text in texts:
+        if not text.strip():
+            continue
+        _, probability = check_safety(text, model, tokenizer)
+        if probability > max_probability:
+            max_probability = probability
+    return (
+        max_probability > TOXICITY_THRESHOLD,
+        round(max_probability, TOXICITY_SCORE_PRECISION),
+    )
 
 
 @torch.inference_mode()
@@ -299,11 +341,13 @@ def run_pipeline(
             and guardian_model is not None
             and guardian_tokenizer is not None
         ):
-            is_toxic, toxicity_score = check_safety(
-                " ".join(raw_texts), guardian_model, guardian_tokenizer
+            # Per-segment so long transcripts don't get silently truncated by
+            # the guardian's 512-token cap; report the worst segment's score.
+            is_toxic, score = _aggregate_segment_safety(
+                raw_texts, guardian_model, guardian_tokenizer
             )
             result["is_toxic"] = is_toxic
-            result["toxicity_score"] = toxicity_score
+            result["toxicity_score"] = score
         results[task] = result
     return results
 

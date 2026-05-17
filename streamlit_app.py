@@ -365,6 +365,18 @@ def run_pipeline(
     return results
 
 
+def _row_sizes(n: int) -> list[int]:
+    """Split n result cards into rows of at most 3, as evenly as possible.
+
+    e.g. 4 → [2, 2] instead of [3, 1]; 7 → [3, 2, 2] instead of [3, 3, 1].
+    """
+    if n <= 0:
+        return []
+    rows = -(-n // 3)
+    base, extra = divmod(n, rows)
+    return [base + 1] * extra + [base] * (rows - extra)
+
+
 def _labeled_toggle(label: str, help: str, key: str, value: bool = True) -> bool:
     label_col, toggle_col = st.columns([15, 1], vertical_alignment="center")
     with label_col:
@@ -608,15 +620,17 @@ def main() -> None:
         source_used = st.session_state.result_source
         task_names = list(results.keys())
 
-        num_cols = min(len(task_names), 3)
-        for row_start in range(0, len(task_names), num_cols):
-            row_tasks = task_names[row_start : row_start + num_cols]
-            cols = st.columns(num_cols)
-            for col, task_name in zip(cols, row_tasks, strict=True):
+        idx = 0
+        for row_size in _row_sizes(len(task_names)):
+            cols = st.columns(row_size)
+            for col, task_name in zip(
+                cols, task_names[idx : idx + row_size], strict=True
+            ):
                 with col:
                     _render_result_card(
                         source_used, task_name, results[task_name], stem
                     )
+            idx += row_size
 
 
 if __name__ == "__main__":

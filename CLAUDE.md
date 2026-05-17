@@ -51,20 +51,25 @@ uv run streamlit run streamlit_app.py
 ### Functions
 
 - `build_tasks` — returns ordered `{task_name: prompt}` dict for a given source language
+- `apply_keywords` — appends `Keywords: kw1, kw2, ...` suffix to each prompt when the keywords list is non-empty
 - `produces_english` — predicate: does `(source, task)` yield English output (drives safety check)
+- `compute_safety_tasks` — filters `selected_tasks` to those producing English output; returns empty set when toxicity check is off
 - `result_title` — display title for result cards (transcription shows source; translation shows target)
 - `result_slug` — filename slug for downloads (transcription includes source; translation uses target)
 - `is_video` — predicate by extension, drives `st.video` vs `st.audio` preview
 - `format_timestamp` — formats seconds to `M:SS` or `H:MM:SS`
+- `_detect_cot_target` — returns the single translation target when tasks include `Transcribe` + exactly one translation; else `None`
+- `_cot_prompt` — builds the CoT-AST prompt: `"Can you transcribe the speech, and then translate it to {target}?"`
+- `_parse_cot_output` — splits CoT model output into `(transcription, translation)` via `[Transcription]` / `[Translation]` tags; returns `("", "")` on parse failure
 - `silero_vad` — runs Silero VAD on waveform, returns `(start, end)` tuples in seconds
 - `get_speech_segments` — post-processes VAD output with buffering and merging
 - `load_vad_model` — cached Silero VAD model loader
-- `run_pipeline` — takes `tasks: dict[str, str]` (task→prompt), `safety_tasks: set[str]`, and `use_segmentation: bool`; when segmentation is on, runs VAD then transcribes each segment; when off, treats the full audio as a single segment. Emits timestamped output and runs safety check only for tasks in `safety_tasks`.
+- `run_pipeline` — takes `tasks: dict[str, str]` (task→prompt), `safety_tasks: set[str]`, and `use_segmentation: bool`; when segmentation is on, runs VAD then transcribes each segment; when off, treats the full audio as a single segment. When `tasks` includes `Transcribe` + exactly one translation target, automatically uses CoT-AST prompting (one inference per segment, parsed into both result cards; falls back to direct AST on parse failure). Emits timestamped output and runs safety check only for tasks in `safety_tasks`.
 
 ### Models
 
 - [Granite 4.0 1b Speech 8bit](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit) — transcription and translation (MLX, 8-bit quantized)
-- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m) — English toxicity detection (runs on CPU)
+- [Granite Guardian HAP 125m](https://huggingface.co/ibm-granite/granite-guardian-hap-125m) — English toxicity detection (runs on CPU)
 - [Silero VAD](https://github.com/snakers4/silero-vad) — Voice Activity Detection for speech segmentation (runs on CPU)
 
 ### Languages
@@ -81,6 +86,8 @@ uv run streamlit run streamlit_app.py
 - **Source language** — `st.segmented_control` (single-select), `English` default; drives the task option list via `build_tasks(source)`
 - **Task selection** — `st.pills` with `selection_mode="multi"`, label hidden, `Transcribe` preselected; widget keyed by source so options reset when source changes
 - **VAD segmentation** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("VAD segmentation", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, VAD model load is skipped and `run_pipeline` treats the full audio as a single segment. Part of `_last_input_key` so toggling invalidates cached results.
+- **Keywords** — `st.markdown("Keywords", help=...)` label followed by `st.multiselect` with `accept_new_options=True`, `max_selections=15`, `label_visibility="collapsed"`, and placeholder `"Add keywords..."`. When non-empty, `apply_keywords` appends `Keywords: kw1, kw2, ...` to every prompt before inference. Part of `_last_input_key` (as `tuple(sorted(keywords))`) so changes invalidate cached results.
+- **Toxicity check** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("Toxicity check", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, `compute_safety_tasks` returns an empty set so guardian model load and per-task safety check are both skipped. Part of `_last_input_key` so toggling invalidates cached results.
 - **Run button** — `st.button("Transcribe", type="primary", width="stretch")` placed in a right-aligned column via `st.columns([4, 1])`; disabled until audio is loaded and at least one task is selected
 - **Results** — pipeline results, stem, and source captured at run time in `st.session_state`; displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
 - **Safety** — results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score whenever output is English (English source transcription, or X→English translation)
@@ -96,7 +103,7 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
-- Guardian model runs on CPU with default dtype (38M params, fast inference)
+- Guardian model runs on CPU with default dtype (125M params)
 - Silero VAD model runs on CPU (~3MB)
 - `max_tokens=512` per segment (prevents truncation on long speech)
 
@@ -111,12 +118,12 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `produces_english`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `silero_vad`, `get_speech_segments`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off), and result card rendering. `TestRunPipeline` patches `get_speech_segments` via `setup_method` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
+`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `apply_keywords`, `produces_english`, `compute_safety_tasks`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `_detect_cot_target`, `_cot_prompt`, `_parse_cot_output`, `silero_vad`, `get_speech_segments`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off, CoT-AST optimization with parse fallback), and result card rendering. `TestRunPipeline` patches `get_speech_segments` via `setup_method` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
 
 ## Resources
 
 - [Granite 4.0 1b Speech 8bit (MLX)](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit)
-- [Granite Guardian HAP 38m](https://huggingface.co/ibm-granite/granite-guardian-hap-38m)
+- [Granite Guardian HAP 125m](https://huggingface.co/ibm-granite/granite-guardian-hap-125m)
 - [Granite Speech Models](https://huggingface.co/collections/ibm-granite/granite-speech)
 - [Technical Report](https://arxiv.org/abs/2505.08699)
 - [Finetune on custom data](https://github.com/ibm-granite/granite-speech-models/blob/main/notebooks/fine_tuning_granite_speech.ipynb)

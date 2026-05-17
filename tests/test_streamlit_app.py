@@ -13,9 +13,15 @@ from streamlit_app import (
     SUPPORTED_FORMATS,
     TRANSCRIBE_PROMPT,
     VIDEO_FORMATS,
+    PipelineResult,
+    _cot_prompt,
+    _detect_cot_target,
+    _parse_cot_output,
     _render_result_card,
+    apply_keywords,
     build_tasks,
     check_safety,
+    compute_safety_tasks,
     format_timestamp,
     get_speech_segments,
     is_video,
@@ -39,7 +45,7 @@ class TestModelIds:
         assert MODEL_ID == "mlx-community/granite-4.0-1b-speech-8bit"
 
     def test_guardian_model_id(self) -> None:
-        assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-38m"
+        assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-125m"
 
 
 class TestSourceLanguages:
@@ -107,6 +113,20 @@ class TestBuildTasks:
         assert list(tasks.keys())[0] == "Transcribe"
 
 
+class TestApplyKeywords:
+    def test_empty_keywords_returns_prompt_unchanged(self) -> None:
+        assert apply_keywords("p1", []) == "p1"
+
+    def test_single_keyword_appended(self) -> None:
+        assert apply_keywords("p", ["IBM"]) == "p Keywords: IBM"
+
+    def test_multiple_keywords_joined_with_comma_space(self) -> None:
+        assert (
+            apply_keywords("p", ["IBM", "MLX", "Granite"])
+            == "p Keywords: IBM, MLX, Granite"
+        )
+
+
 class TestProducesEnglish:
     def test_english_transcribe_is_english(self) -> None:
         assert produces_english("English", "Transcribe") is True
@@ -122,6 +142,26 @@ class TestProducesEnglish:
     def test_translation_to_non_english_is_not_english(self) -> None:
         for target in EN_TARGETS:
             assert produces_english("English", target) is False
+
+
+class TestComputeSafetyTasks:
+    def test_toggle_off_returns_empty(self) -> None:
+        assert compute_safety_tasks(["Transcribe", "French"], "English", False) == set()
+
+    def test_english_transcribe_included(self) -> None:
+        assert compute_safety_tasks(["Transcribe"], "English", True) == {"Transcribe"}
+
+    def test_non_english_transcribe_excluded(self) -> None:
+        assert compute_safety_tasks(["Transcribe"], "French", True) == set()
+
+    def test_translation_to_english_included(self) -> None:
+        assert compute_safety_tasks(["English"], "French", True) == {"English"}
+
+    def test_filters_mixed_tasks_by_english_output(self) -> None:
+        result = compute_safety_tasks(
+            ["Transcribe", "French", "German"], "English", True
+        )
+        assert result == {"Transcribe"}
 
 
 class TestResultTitle:
@@ -206,6 +246,60 @@ class TestFormatTimestamp:
 
     def test_fractional_seconds_truncated(self) -> None:
         assert format_timestamp(15.7) == "0:15"
+
+
+class TestDetectCotTarget:
+    def test_transcribe_with_one_translation_returns_target(self) -> None:
+        assert _detect_cot_target({"Transcribe": "p1", "French": "p2"}) == "French"
+
+    def test_no_transcribe_returns_none(self) -> None:
+        assert _detect_cot_target({"French": "p1"}) is None
+
+    def test_only_transcribe_returns_none(self) -> None:
+        assert _detect_cot_target({"Transcribe": "p1"}) is None
+
+    def test_multiple_translations_returns_none(self) -> None:
+        tasks = {"Transcribe": "p1", "French": "p2", "German": "p3"}
+        assert _detect_cot_target(tasks) is None
+
+    def test_empty_returns_none(self) -> None:
+        assert _detect_cot_target({}) is None
+
+
+class TestCotPrompt:
+    def test_includes_target_language(self) -> None:
+        assert (
+            _cot_prompt("French")
+            == "Can you transcribe the speech, and then translate it to French?"
+        )
+
+    def test_multi_word_target(self) -> None:
+        assert "Mandarin Chinese" in _cot_prompt("Mandarin Chinese")
+
+
+class TestParseCotOutput:
+    def test_well_formed_output(self) -> None:
+        text = "[Transcription] hello world [Translation] bonjour le monde"
+        assert _parse_cot_output(text) == ("hello world", "bonjour le monde")
+
+    def test_no_tags_returns_empty(self) -> None:
+        assert _parse_cot_output("just a plain transcript") == ("", "")
+
+    def test_only_transcription_tag(self) -> None:
+        assert _parse_cot_output("[Transcription] hello") == ("hello", "")
+
+    def test_only_translation_tag(self) -> None:
+        assert _parse_cot_output("[Translation] bonjour") == ("", "bonjour")
+
+    def test_multiline_content(self) -> None:
+        text = "[Transcription] line one\nline two [Translation] bonjour\nle monde"
+        transcription, translation = _parse_cot_output(text)
+        assert transcription == "line one\nline two"
+        assert translation == "bonjour\nle monde"
+
+    def test_strips_whitespace(self) -> None:
+        text = "[Transcription]   hello   [Translation]   bonjour   "
+        assert _parse_cot_output(text) == ("hello", "bonjour")
 
 
 class TestSileroVad:
@@ -511,6 +605,7 @@ class TestRunPipeline:
         tasks = {
             "Transcribe": "transcribe prompt",
             "French": "translate to French",
+            "German": "translate to German",
         }
 
         run_pipeline.__wrapped__(  # type: ignore[attr-defined]
@@ -524,9 +619,10 @@ class TestRunPipeline:
         )
 
         calls = model.generate.call_args_list
-        assert len(calls) == 2
+        assert len(calls) == 3
         assert calls[0][1]["prompt"] == "transcribe prompt"
         assert calls[1][1]["prompt"] == "translate to French"
+        assert calls[2][1]["prompt"] == "translate to German"
 
     def test_preserves_task_order(self) -> None:
         model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
@@ -758,17 +854,153 @@ class TestRunPipeline:
         assert model.generate.call_count == 1
         assert "[0:00 - 0:03]" in results["Transcribe"]["transcript"]
 
+    def test_cot_optimization_reduces_inference_count(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model.generate.return_value = MagicMock(
+            text="[Transcription] hello [Translation] bonjour"
+        )
+        wav = torch.zeros(1, 48000)
+        segments = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
+        tasks = {"Transcribe": TRANSCRIBE_PROMPT, "French": "translate to French"}
+
+        with patch("streamlit_app.get_speech_segments", return_value=segments):
+            run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+                wav,
+                tasks,
+                set(),
+                model,
+                vad_model,
+                guardian_model,
+                guardian_tokenizer,
+            )
+
+        assert model.generate.call_count == 2
+
+    def test_cot_uses_cot_prompt_for_transcribe(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model.generate.return_value = MagicMock(
+            text="[Transcription] hello [Translation] bonjour"
+        )
+        wav = torch.zeros(1, 16000)
+        tasks = {"Transcribe": TRANSCRIBE_PROMPT, "French": "translate to French"}
+
+        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            tasks,
+            set(),
+            model,
+            vad_model,
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        calls = model.generate.call_args_list
+        assert len(calls) == 1
+        prompt = calls[0][1]["prompt"]
+        assert (
+            prompt == "Can you transcribe the speech, and then translate it to French?"
+        )
+
+    def test_cot_splits_output_into_two_results(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model.generate.return_value = MagicMock(
+            text="[Transcription] hello world [Translation] bonjour le monde"
+        )
+        wav = torch.zeros(1, 16000)
+        tasks = {"Transcribe": TRANSCRIBE_PROMPT, "French": "translate to French"}
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            tasks,
+            set(),
+            model,
+            vad_model,
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        assert "hello world" in results["Transcribe"]["transcript"]
+        assert "bonjour le monde" in results["French"]["transcript"]
+
+    def test_cot_parse_failure_falls_back_to_direct_ast(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model.generate.side_effect = [
+            MagicMock(text="just a transcript with no tags"),
+            MagicMock(text="translated text"),
+        ]
+        wav = torch.zeros(1, 16000)
+        tasks = {"Transcribe": TRANSCRIBE_PROMPT, "French": "translate to French"}
+
+        results = run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            tasks,
+            set(),
+            model,
+            vad_model,
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        assert "just a transcript with no tags" in results["Transcribe"]["transcript"]
+        assert "translated text" in results["French"]["transcript"]
+        assert model.generate.call_count == 2
+
+    def test_cot_not_triggered_for_multi_target(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
+        wav = torch.zeros(1, 16000)
+        tasks = {"Transcribe": TRANSCRIBE_PROMPT, "French": "p2", "German": "p3"}
+
+        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            tasks,
+            set(),
+            model,
+            vad_model,
+            guardian_model,
+            guardian_tokenizer,
+        )
+
+        assert model.generate.call_count == 3
+        for call in model.generate.call_args_list:
+            prompt = call[1]["prompt"]
+            assert "Can you transcribe the speech, and then translate it" not in prompt
+
+    def test_cot_appends_keywords_to_prompt(self) -> None:
+        model, vad_model, guardian_model, guardian_tokenizer = self._make_mocks()
+        model.generate.return_value = MagicMock(
+            text="[Transcription] hello [Translation] bonjour"
+        )
+        wav = torch.zeros(1, 16000)
+        tasks = {"Transcribe": TRANSCRIBE_PROMPT, "French": "translate to French"}
+
+        run_pipeline.__wrapped__(  # type: ignore[attr-defined]
+            wav,
+            tasks,
+            set(),
+            model,
+            vad_model,
+            guardian_model,
+            guardian_tokenizer,
+            keywords=["IBM", "MLX"],
+        )
+
+        prompt = model.generate.call_args[1]["prompt"]
+        assert (
+            "Can you transcribe the speech, and then translate it to French?" in prompt
+        )
+        assert "Keywords: IBM, MLX" in prompt
+
 
 class TestRenderResultCard:
     @patch("streamlit_app.st")
     def test_renders_text(self, mock_st: MagicMock) -> None:
-        result = {"transcript": "hello"}
+        result: PipelineResult = {"transcript": "hello"}
         _render_result_card("English", "Transcribe", result, "test")
         mock_st.text.assert_called_once_with("hello")
 
     @patch("streamlit_app.st")
     def test_shows_safe_banner(self, mock_st: MagicMock) -> None:
-        result = {
+        result: PipelineResult = {
             "transcript": "hello",
             "is_toxic": False,
             "toxicity_score": 0.1,
@@ -780,7 +1012,7 @@ class TestRenderResultCard:
 
     @patch("streamlit_app.st")
     def test_shows_toxic_banner(self, mock_st: MagicMock) -> None:
-        result = {
+        result: PipelineResult = {
             "transcript": "bad content",
             "is_toxic": True,
             "toxicity_score": 0.9,
@@ -792,14 +1024,14 @@ class TestRenderResultCard:
 
     @patch("streamlit_app.st")
     def test_no_safety_banner_for_translation(self, mock_st: MagicMock) -> None:
-        result = {"transcript": "bonjour"}
+        result: PipelineResult = {"transcript": "bonjour"}
         _render_result_card("English", "French", result, "test")
         mock_st.success.assert_not_called()
         mock_st.warning.assert_not_called()
 
     @patch("streamlit_app.st")
     def test_download_filename_for_translation(self, mock_st: MagicMock) -> None:
-        result = {"transcript": "hello world"}
+        result: PipelineResult = {"transcript": "hello world"}
         _render_result_card("English", "Mandarin Chinese", result, "audio")
         txt_filename = mock_st.download_button.call_args[0][2]
         assert txt_filename == "audio_mandarin_chinese.txt"
@@ -808,34 +1040,32 @@ class TestRenderResultCard:
     def test_download_filename_for_transcription_includes_source(
         self, mock_st: MagicMock
     ) -> None:
-        result = {"transcript": "hallo"}
+        result: PipelineResult = {"transcript": "hallo"}
         _render_result_card("German", "Transcribe", result, "audio")
         txt_filename = mock_st.download_button.call_args[0][2]
         assert txt_filename == "audio_transcribe_german.txt"
 
     @patch("streamlit_app.st")
     def test_download_tooltip_for_transcription(self, mock_st: MagicMock) -> None:
-        result = {"transcript": "hello"}
+        result: PipelineResult = {"transcript": "hello"}
         _render_result_card("English", "Transcribe", result, "test")
         assert mock_st.download_button.call_args[1]["help"] == "Download transcription"
 
     @patch("streamlit_app.st")
     def test_download_tooltip_for_translation(self, mock_st: MagicMock) -> None:
-        result = {"transcript": "bonjour"}
+        result: PipelineResult = {"transcript": "bonjour"}
         _render_result_card("English", "French", result, "test")
         assert mock_st.download_button.call_args[1]["help"] == "Download translation"
 
     @patch("streamlit_app.st")
     def test_renders_bordered_container(self, mock_st: MagicMock) -> None:
-        result = {"transcript": "hello"}
+        result: PipelineResult = {"transcript": "hello"}
         _render_result_card("English", "Transcribe", result, "test")
         mock_st.container.assert_called_once_with(border=True)
 
     @patch("streamlit_app.st")
-    def test_transcription_card_title_includes_source(
-        self, mock_st: MagicMock
-    ) -> None:
-        result = {"transcript": "hallo"}
+    def test_transcription_card_title_includes_source(self, mock_st: MagicMock) -> None:
+        result: PipelineResult = {"transcript": "hallo"}
         _render_result_card("German", "Transcribe", result, "test")
         mock_st.subheader.assert_called_once_with("Transcribe (German)")
 
@@ -843,6 +1073,6 @@ class TestRenderResultCard:
     def test_translation_card_title_is_target_language(
         self, mock_st: MagicMock
     ) -> None:
-        result = {"transcript": "bonjour"}
+        result: PipelineResult = {"transcript": "bonjour"}
         _render_result_card("English", "French", result, "test")
         mock_st.subheader.assert_called_once_with("French")

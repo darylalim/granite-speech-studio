@@ -1,8 +1,9 @@
 import io
+import re
 import warnings
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 from pathlib import Path
 
 import streamlit as st
@@ -17,7 +18,7 @@ warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
 )
 MODEL_ID = "mlx-community/granite-4.0-1b-speech-8bit"
-GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-38m"
+GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-125m"
 SOURCE_LANGUAGES = [
     "English",
     "French",
@@ -52,6 +53,12 @@ VIDEO_FORMATS = {"mp4", "mov", "webm", "mkv"}
 SAMPLE_RATE = 16000
 
 
+class PipelineResult(TypedDict):
+    transcript: str
+    is_toxic: NotRequired[bool]
+    toxicity_score: NotRequired[float]
+
+
 def is_video(filename: str) -> bool:
     return Path(filename).suffix.lower().lstrip(".") in VIDEO_FORMATS
 
@@ -64,10 +71,24 @@ def build_tasks(source: str) -> dict[str, str]:
     return tasks
 
 
+def apply_keywords(prompt: str, keywords: list[str]) -> str:
+    if not keywords:
+        return prompt
+    return f"{prompt} Keywords: {', '.join(keywords)}"
+
+
 def produces_english(source: str, task: str) -> bool:
     if task == "Transcribe":
         return source == "English"
     return task == "English"
+
+
+def compute_safety_tasks(
+    selected_tasks: list[str], source: str, use_toxicity_check: bool
+) -> set[str]:
+    if not use_toxicity_check:
+        return set()
+    return {name for name in selected_tasks if produces_english(source, name)}
 
 
 def result_title(source: str, task: str) -> str:
@@ -88,6 +109,29 @@ def format_timestamp(seconds: float) -> str:
     if hours > 0:
         return f"{hours}:{mins:02d}:{secs:02d}"
     return f"{mins}:{secs:02d}"
+
+
+def _detect_cot_target(tasks: dict[str, str]) -> str | None:
+    if "Transcribe" not in tasks:
+        return None
+    other_tasks = [t for t in tasks if t != "Transcribe"]
+    if len(other_tasks) != 1:
+        return None
+    return other_tasks[0]
+
+
+def _cot_prompt(target: str) -> str:
+    return f"Can you transcribe the speech, and then translate it to {target}?"
+
+
+def _parse_cot_output(text: str) -> tuple[str, str]:
+    transcription_match = re.search(
+        r"\[Transcription\](.*?)(?=\[Translation\]|$)", text, re.DOTALL
+    )
+    translation_match = re.search(r"\[Translation\](.*)$", text, re.DOTALL)
+    transcription = transcription_match.group(1).strip() if transcription_match else ""
+    translation = translation_match.group(1).strip() if translation_match else ""
+    return transcription, translation
 
 
 def silero_vad(
@@ -143,9 +187,7 @@ def load_and_preprocess_audio(audio_file: UploadedFile) -> torch.Tensor:
 
 
 @st.cache_resource(show_spinner=False)
-def load_guardian_model(
-    model_id: str,
-) -> tuple[AutoModelForSequenceClassification, AutoTokenizer]:
+def load_guardian_model(model_id: str) -> tuple[Any, Any]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForSequenceClassification.from_pretrained(model_id)
     return model, tokenizer
@@ -158,8 +200,8 @@ def load_vad_model() -> torch.nn.Module:
 
 def check_safety(
     text: str,
-    model: AutoModelForSequenceClassification,
-    tokenizer: AutoTokenizer,
+    model: Any,
+    tokenizer: Any,
 ) -> tuple[bool, float]:
     inputs = tokenizer([text], padding=True, truncation=True, return_tensors="pt")
     logits = model(**inputs).logits
@@ -185,32 +227,61 @@ def run_pipeline(
     safety_tasks: set[str],
     model: Any,
     vad_model: torch.nn.Module | None = None,
-    guardian_model: AutoModelForSequenceClassification | None = None,
-    guardian_tokenizer: AutoTokenizer | None = None,
+    guardian_model: Any | None = None,
+    guardian_tokenizer: Any | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
     use_segmentation: bool = True,
-) -> dict[str, dict[str, object]]:
+    keywords: list[str] | None = None,
+) -> dict[str, PipelineResult]:
     if use_segmentation:
         assert vad_model is not None, "vad_model required when use_segmentation=True"
         segments = get_speech_segments(wav, vad_model)
     else:
         duration = wav.shape[-1] / SAMPLE_RATE
         segments = [{"start": 0.0, "end": duration}]
-    results: dict[str, dict[str, object]] = {}
+    if keywords is None:
+        keywords = []
+    # CoT relies on Transcribe being iterated before the translation target;
+    # build_tasks preserves this via insertion order.
+    cot_target = _detect_cot_target(tasks)
+    cot_translation_cache: dict[int, str] = {}
+    results: dict[str, PipelineResult] = {}
     for i, (task, prompt) in enumerate(tasks.items()):
         if on_progress:
             on_progress(i, len(tasks), task)
+        use_cot = cot_target is not None and task == "Transcribe"
+        read_cot_cache = cot_target is not None and task == cot_target
+        if use_cot:
+            assert cot_target is not None
+            base_prompt = _cot_prompt(cot_target)
+        else:
+            base_prompt = prompt
+        actual_prompt = apply_keywords(base_prompt, keywords)
         raw_texts: list[str] = []
         lines: list[str] = []
-        for seg in segments:
+        for seg_idx, seg in enumerate(segments):
             start_sample = int(seg["start"] * SAMPLE_RATE)
             end_sample = int(seg["end"] * SAMPLE_RATE)
-            text = transcribe_audio(wav[:, start_sample:end_sample], prompt, model)
+            if read_cot_cache and seg_idx in cot_translation_cache:
+                text = cot_translation_cache[seg_idx]
+            else:
+                raw = transcribe_audio(
+                    wav[:, start_sample:end_sample], actual_prompt, model
+                )
+                if use_cot:
+                    transcription, translation = _parse_cot_output(raw)
+                    if not transcription and not translation:
+                        text = raw
+                    else:
+                        text = transcription
+                        cot_translation_cache[seg_idx] = translation
+                else:
+                    text = raw
             raw_texts.append(text)
             ts_start = format_timestamp(seg["start"])
             ts_end = format_timestamp(seg["end"])
             lines.append(f"[{ts_start} - {ts_end}] {text}")
-        result: dict[str, object] = {"transcript": "\n".join(lines)}
+        result: PipelineResult = {"transcript": "\n".join(lines)}
         if (
             task in safety_tasks
             and guardian_model is not None
@@ -225,18 +296,27 @@ def run_pipeline(
     return results
 
 
+def _labeled_toggle(label: str, help: str, key: str, value: bool = True) -> bool:
+    label_col, toggle_col = st.columns([15, 1], vertical_alignment="center")
+    with label_col:
+        st.markdown(label, help=help)
+    with toggle_col:
+        return st.toggle(label, value=value, label_visibility="collapsed", key=key)
+
+
 def _render_result_card(
     source: str,
     task: str,
-    result: dict[str, object],
+    result: PipelineResult,
     stem: str,
 ) -> None:
+    transcript = result["transcript"]
     title = result_title(source, task)
     is_transcription = task == "Transcribe"
     slug = result_slug(source, task)
     with st.container(border=True):
         st.subheader(title)
-        st.text(result["transcript"])
+        st.text(transcript)
         if "is_toxic" in result:
             score = f"score: {result['toxicity_score']:.1%}"
             if result["is_toxic"]:
@@ -248,7 +328,7 @@ def _render_result_card(
         )
         st.download_button(
             "",
-            result["transcript"],
+            transcript,
             f"{stem}_{slug}.txt",
             "text/plain",
             key=f"dl_txt_{source}_{task}",
@@ -310,23 +390,42 @@ def main() -> None:
         else []
     )
 
-    label_col, toggle_col = st.columns([15, 1], vertical_alignment="center")
-    with label_col:
-        st.markdown(
-            "VAD segmentation",
-            help=(
-                "Splits audio into speech segments with timestamps using "
-                "Silero VAD. Disable for short utterances or to process "
-                "the whole audio in one pass."
-            ),
-        )
-    with toggle_col:
-        use_segmentation = st.toggle(
-            "VAD segmentation",
-            value=True,
-            label_visibility="collapsed",
-            key="use_segmentation",
-        )
+    use_segmentation = _labeled_toggle(
+        "VAD segmentation",
+        help=(
+            "Splits audio into speech segments with timestamps using "
+            "Silero VAD. Disable for short utterances or to process "
+            "the whole audio in one pass."
+        ),
+        key="use_segmentation",
+    )
+
+    st.markdown(
+        "Keywords",
+        help=(
+            "Up to 15 keywords to be boosted during transcription. "
+            "Boosted terms are more likely to appear in the output."
+        ),
+    )
+    keywords = st.multiselect(
+        "Keywords",
+        options=[],
+        accept_new_options=True,
+        max_selections=15,
+        placeholder="Add keywords...",
+        label_visibility="collapsed",
+        key="keywords",
+    )
+
+    use_toxicity_check = _labeled_toggle(
+        "Toxicity check",
+        help=(
+            "Checks English transcripts and translations for toxic content "
+            "via Granite Guardian. Non-English output is skipped regardless "
+            "of this setting."
+        ),
+        key="use_toxicity_check",
+    )
 
     input_key = (
         (
@@ -335,6 +434,8 @@ def main() -> None:
             source,
             tuple(selected_tasks),
             use_segmentation,
+            tuple(sorted(keywords)),
+            use_toxicity_check,
         )
         if audio_file
         else None
@@ -356,6 +457,7 @@ def main() -> None:
         )
 
     if run_clicked and can_run:
+        assert audio_file is not None
         progress = st.progress(0, text="Starting pipeline...")
         try:
             with st.spinner("Loading speech model..."):
@@ -372,9 +474,9 @@ def main() -> None:
                 progress.progress(i / total, text=f"Processing: {task}...")
 
             tasks_to_run = {name: available_tasks[name] for name in selected_tasks}
-            safety_tasks = {
-                name for name in selected_tasks if produces_english(source, name)
-            }
+            safety_tasks = compute_safety_tasks(
+                selected_tasks, source, use_toxicity_check
+            )
 
             if safety_tasks:
                 with st.spinner("Loading safety model..."):
@@ -394,6 +496,7 @@ def main() -> None:
                 guardian_tokenizer,
                 on_progress=update_progress,
                 use_segmentation=use_segmentation,
+                keywords=keywords,
             )
             progress.empty()
             st.session_state.results = pipeline_results
@@ -421,7 +524,7 @@ def main() -> None:
         for row_start in range(0, len(task_names), num_cols):
             row_tasks = task_names[row_start : row_start + num_cols]
             cols = st.columns(num_cols)
-            for col, task_name in zip(cols, row_tasks):
+            for col, task_name in zip(cols, row_tasks, strict=True):
                 with col:
                     _render_result_card(
                         source_used, task_name, results[task_name], stem

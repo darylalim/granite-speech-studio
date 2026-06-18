@@ -8,10 +8,12 @@ attributes does not cross AppTest's script-runner boundary, and clicking Run
 without an upstream patch would load the real ~2.9GB speech model.
 """
 
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 APP = Path(__file__).parent.parent / "streamlit_app.py"
@@ -25,6 +27,16 @@ def audio_bytes() -> bytes:
 
 def _app() -> AppTest:
     return AppTest.from_file(str(APP), default_timeout=60)
+
+
+@pytest.fixture(autouse=True)
+def _clear_streamlit_caches() -> Iterator[None]:
+    # AppTest does not reset Streamlit's process-global @st.cache_resource store
+    # between instances, so a cached (mocked or real) model could leak across
+    # tests — which would make the Run-path loader.assert_called() guard
+    # order-dependent. Clear it before every test for isolation.
+    st.cache_resource.clear()
+    yield
 
 
 def test_default_state() -> None:
@@ -107,3 +119,28 @@ def test_run_renders_result_card(audio_bytes: bytes) -> None:
     loader.assert_called()  # guard: the real speech model must never load
     assert at.subheader[0].value == "Transcribe (English)"
     assert "mocked" in at.text[0].value
+
+
+def test_run_renders_multiple_result_cards(audio_bytes: bytes) -> None:
+    """Transcribe + one translation drives the CoT-AST path and the multi-card
+    result grid (the N>1 _row_sizes -> st.columns loop in main()), which the
+    single-task Run test does not exercise."""
+    fake_model = MagicMock()
+    fake_model.generate.return_value.text = (
+        "[Transcription] hello world [Translation] bonjour le monde"
+    )
+    with patch("mlx_audio.stt.utils.load_model", return_value=fake_model):
+        at = _app().run()
+        at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
+        at.pills[0].set_value(["Transcribe", "French"])
+        at.toggle(key="use_segmentation").set_value(False)
+        at.toggle(key="use_toxicity_check").set_value(False)
+        at.run()
+        at.button[0].click()
+        at.run()
+    assert not at.exception
+    assert {s.value for s in at.subheader} == {"Transcribe (English)", "French"}
+    # CoT output is split: transcription -> Transcribe card, translation -> French.
+    texts = " ".join(t.value for t in at.text)
+    assert "hello world" in texts
+    assert "bonjour le monde" in texts

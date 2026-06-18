@@ -1009,6 +1009,7 @@ class TestRenderResultCard:
         msg = mock_st.success.call_args[0][0]
         assert "safe" in msg.lower()
         assert "10.0%" in msg
+        assert mock_st.success.call_args.kwargs["icon"] == ":material/check_circle:"
 
     def test_shows_toxic_banner(self, mock_st: MagicMock) -> None:
         result: PipelineResult = {
@@ -1020,6 +1021,7 @@ class TestRenderResultCard:
         msg = mock_st.warning.call_args[0][0]
         assert "toxic" in msg.lower()
         assert "90.0%" in msg
+        assert mock_st.warning.call_args.kwargs["icon"] == ":material/warning:"
 
     def test_no_safety_banner_without_toxic_field(self, mock_st: MagicMock) -> None:
         result: PipelineResult = {"transcript": "bonjour"}

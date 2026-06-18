@@ -20,6 +20,8 @@ uv run streamlit run streamlit_app.py
 - **Typecheck**: `uv run ty check`
 - **Test**: `uv run pytest`
 
+When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `/astral:ty`, `/astral:ruff`) for uv, ty, and ruff to ensure best practices are followed.
+
 ## Code Style
 
 - snake_case for functions/variables, PascalCase for classes

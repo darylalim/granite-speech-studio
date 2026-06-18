@@ -465,11 +465,9 @@ def main() -> None:
         label_visibility="collapsed",
         key=f"tasks_{source}",
     )
-    selected_tasks: list[str] = (
-        [t for t in selected_value if isinstance(t, str)]
-        if isinstance(selected_value, list)
-        else []
-    )
+    selected_tasks: list[str] = [
+        t for t in selected_value if isinstance(t, str)
+    ]
 
     use_segmentation = _labeled_toggle(
         "VAD segmentation",

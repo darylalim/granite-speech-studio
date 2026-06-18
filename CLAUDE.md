@@ -46,6 +46,8 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 
 `pyproject.toml` — ruff isort (`combine-as-imports`) and ty (`python-version = "3.12"`).
 
+`.streamlit/config.toml` — IBM Carbon-inspired light `[theme]` (colors only, no remote web fonts).
+
 ## Architecture
 
 `streamlit_app.py` — single-file app.
@@ -85,7 +87,8 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 
 ### UI Layout (top to bottom)
 
-- **Title + description** — `st.title` plus `st.markdown` linking to the IBM Granite 4.0 1B Speech model card
+- **Page config** — `st.set_page_config` sets `page_title`, `page_icon` (`:material/graphic_eq:`), and `layout="centered"`
+- **Title + description** — center-aligned (`text_alignment="center"`) `st.title` plus `st.markdown` linking to the IBM Granite 4.0 1B Speech model card
 - **Audio input** — `st.tabs` with Upload (`st.file_uploader`) first, then Record (`st.audio_input`); labels hidden via `label_visibility="collapsed"`
 - **Audio/video preview** — `st.video` for video containers, `st.audio` otherwise; selected via `is_video(filename)`. `st.caption` shows filename or "Recorded audio".
 - **Source language** — `st.segmented_control` (single-select), `English` default; drives the task option list via `build_tasks(source)`
@@ -95,7 +98,7 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 - **Toxicity check** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("Toxicity check", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, `compute_safety_tasks` returns an empty set so guardian model load and per-task safety check are both skipped. Part of `_last_input_key` so toggling invalidates cached results.
 - **Run button** — `st.button("Transcribe", type="primary", width="stretch")` placed in a right-aligned column via `st.columns([4, 1])`; disabled until audio is loaded and at least one task is selected
 - **Results** — pipeline results, stem, and source captured at run time in `st.session_state`; displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
-- **Safety** — results show `st.success` (safe) or `st.warning` (toxic) banner with toxicity score whenever output is English (English source transcription, or X→English translation)
+- **Safety** — results show `st.success` (safe, `:material/check_circle:`) or `st.warning` (toxic, `:material/warning:`) banner with toxicity score whenever output is English (English source transcription, or X→English translation)
 
 ### Audio Formats
 

@@ -1,2 +1,19 @@
 [server]
 maxUploadSize = 500
+
+# IBM Carbon-inspired light theme to match the Granite branding.
+# Colors only (no custom web fonts) so the app stays dependency-free offline.
+[theme]
+base = "light"
+primaryColor = "#0f62fe"            # IBM Carbon blue 60
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f4f4"
+textColor = "#161616"               # IBM Carbon gray 100
+borderColor = "#e0e0e0"
+linkColor = "#0f62fe"
+linkUnderline = false
+showWidgetBorder = true
+baseRadius = "0.5rem"
+buttonRadius = "0.5rem"
+greenColor = "#24a148"              # safe banner
+redColor = "#da1e28"                # toxic banner

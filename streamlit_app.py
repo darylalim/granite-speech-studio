@@ -401,9 +401,13 @@ def _render_result_card(
         if "is_toxic" in result:
             score = f"score: {result['toxicity_score']:.1%}"
             if result["is_toxic"]:
-                st.warning(f"Toxic content detected ({score})")
+                st.warning(
+                    f"Toxic content detected ({score})", icon=":material/warning:"
+                )
             else:
-                st.success(f"Content is safe ({score})")
+                st.success(
+                    f"Content is safe ({score})", icon=":material/check_circle:"
+                )
         download_help = (
             "Download transcription" if is_transcription else "Download translation"
         )
@@ -419,13 +423,18 @@ def _render_result_card(
 
 
 def main() -> None:
-    st.set_page_config(page_title="Granite Speech Studio")
+    st.set_page_config(
+        page_title="Granite Speech Studio",
+        page_icon=":material/graphic_eq:",
+        layout="centered",
+    )
 
-    st.title("Granite Speech Studio")
+    st.title("Granite Speech Studio", text_alignment="center")
     st.markdown(
         "Transcribe and translate audio and video files with the "
         "[IBM Granite 4.0 1B Speech model]"
-        "(https://huggingface.co/ibm-granite/granite-4.0-1b-speech)."
+        "(https://huggingface.co/ibm-granite/granite-4.0-1b-speech).",
+        text_alignment="center",
     )
 
     upload_tab, record_tab = st.tabs(["Upload", "Record"])

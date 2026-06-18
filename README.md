@@ -1,4 +1,4 @@
-# Granite Speech Pipeline
+# Granite Speech Studio
 
 Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX.
 

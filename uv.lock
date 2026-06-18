@@ -359,7 +359,7 @@ wheels = [
 ]
 
 [[package]]
-name = "granite-speech-pipeline"
+name = "granite-speech-studio"
 version = "0.9.0"
 source = { virtual = "." }
 dependencies = [

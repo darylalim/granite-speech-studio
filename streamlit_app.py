@@ -419,9 +419,9 @@ def _render_result_card(
 
 
 def main() -> None:
-    st.set_page_config(page_title="Granite Speech Pipeline")
+    st.set_page_config(page_title="Granite Speech Studio")
 
-    st.title("Granite Speech Pipeline")
+    st.title("Granite Speech Studio")
     st.markdown(
         "Transcribe and translate audio and video files with the "
         "[IBM Granite 4.0 1B Speech model]"

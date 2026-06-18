@@ -52,10 +52,10 @@ NON_ENGLISH_SOURCES = tuple(s for s in SOURCE_LANGUAGES if s != "English")
 
 # Unwrap st.cache_resource / torch.inference_mode wrappers so tests call the
 # originals without going through Streamlit/torch machinery.
-_load_model = load_model.__wrapped__  # type: ignore[attr-defined]
-_load_guardian_model = load_guardian_model.__wrapped__  # type: ignore[attr-defined]
-_load_vad_model = load_vad_model.__wrapped__  # type: ignore[attr-defined]
-_run_pipeline = run_pipeline.__wrapped__  # type: ignore[attr-defined]
+_load_model = load_model.__wrapped__  # ty: ignore[unresolved-attribute]
+_load_guardian_model = load_guardian_model.__wrapped__  # ty: ignore[unresolved-attribute]
+_load_vad_model = load_vad_model.__wrapped__  # ty: ignore[unresolved-attribute]
+_run_pipeline = run_pipeline.__wrapped__  # ty: ignore[unresolved-attribute]
 
 
 def make_upload(

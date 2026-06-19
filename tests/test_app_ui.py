@@ -8,16 +8,19 @@ attributes does not cross AppTest's script-runner boundary, and clicking Run
 without an upstream patch would load the real ~2.9GB speech model.
 """
 
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import streamlit as st
+from streamlit import config
 from streamlit.testing.v1 import AppTest
 
 APP = Path(__file__).parent.parent / "streamlit_app.py"
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
+CONFIG = Path(__file__).parent.parent / ".streamlit" / "config.toml"
 
 
 @pytest.fixture
@@ -62,6 +65,16 @@ def test_default_state() -> None:
     assert at.button[0].disabled is True
 
 
+def test_faux_labels_are_bold() -> None:
+    """The VAD / Toxicity / Keywords pseudo-labels render as bold markdown so
+    they read as form labels (the real widget labels are collapsed)."""
+    at = _app().run()
+    values = {m.value for m in at.markdown}
+    assert "**VAD segmentation**" in values
+    assert "**Toxicity check**" in values
+    assert "**Keywords**" in values
+
+
 def test_run_button_gating(audio_bytes: bytes) -> None:
     """Run enables once audio + a task are present and re-disables when tasks
     are cleared."""
@@ -97,7 +110,33 @@ def test_vad_off_long_audio_disables_run(audio_bytes: bytes) -> None:
         at.toggle(key="use_segmentation").set_value(False)
         at.run()
     assert at.button[0].disabled is True
-    assert any("longer than 5 minutes" in w.value for w in at.warning)
+    vad_warning = next(
+        (w for w in at.warning if "longer than 5 minutes" in w.value), None
+    )
+    assert vad_warning is not None
+    assert vad_warning.icon == ":material/warning:"
+
+
+def test_duration_cache_evicts_stale_keys(audio_bytes: bytes) -> None:
+    """With VAD off, the per-file _duration_* session_state cache keeps only the
+    current file's entry — swapping files evicts the prior key, so it can't grow
+    unbounded across a session."""
+    at = _app().run()
+    at.toggle(key="use_segmentation").set_value(False)
+    at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
+    at.run()
+    size = len(audio_bytes)
+    duration_keys = [
+        k for k in at.session_state.filtered_state if k.startswith("_duration_")
+    ]
+    assert duration_keys == [f"_duration_a.wav_{size}"]
+
+    at.file_uploader[0].set_value(("b.wav", audio_bytes, "audio/wav"))
+    at.run()
+    duration_keys = [
+        k for k in at.session_state.filtered_state if k.startswith("_duration_")
+    ]
+    assert duration_keys == [f"_duration_b.wav_{size}"]
 
 
 def test_run_renders_result_card(audio_bytes: bytes) -> None:
@@ -142,3 +181,39 @@ def test_run_renders_multiple_result_cards(audio_bytes: bytes) -> None:
     texts = " ".join(t.value for t in at.text)
     assert "hello world" in texts
     assert "bonjour le monde" in texts
+
+
+def test_theme_config_defines_light_and_dark() -> None:
+    """config.toml defines both [theme.light] and [theme.dark] color palettes,
+    which together enable the settings-menu light/dark toggle."""
+    theme = tomllib.loads(CONFIG.read_text())["theme"]
+    assert "light" in theme and "dark" in theme
+    for mode in ("light", "dark"):
+        for key in (
+            "primaryColor",
+            "backgroundColor",
+            "textColor",
+            "greenColor",
+            "redColor",
+        ):
+            assert key in theme[mode], f"theme.{mode}.{key} missing"
+
+
+def test_theme_config_has_no_invalid_options() -> None:
+    """Every key under [theme] is a registered Streamlit config option. Guards
+    against silently-dropped keys like the invalid `theme.light.base` (only
+    `theme.base` exists; sub-themes have no `base`)."""
+    valid = set(config._config_options_template)
+    assert "theme.primaryColor" in valid  # registry is populated
+
+    def walk(prefix: str, table: dict) -> Iterator[str]:
+        for key, value in table.items():
+            full = f"{prefix}.{key}"
+            if isinstance(value, dict):
+                yield from walk(full, value)
+            else:
+                yield full
+
+    theme = tomllib.loads(CONFIG.read_text())["theme"]
+    invalid = [k for k in walk("theme", theme) if k not in valid]
+    assert invalid == [], f"invalid theme config options: {invalid}"

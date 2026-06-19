@@ -12,7 +12,6 @@ baseRadius = "0.5rem"
 buttonRadius = "0.5rem"
 
 [theme.light]
-base = "light"
 primaryColor = "#0f62fe"            # IBM Carbon Blue 60
 linkColor = "#0f62fe"
 backgroundColor = "#ffffff"
@@ -23,7 +22,6 @@ greenColor = "#24a148"              # safe banner (Carbon Green 50)
 redColor = "#da1e28"                # error / pipeline-failure callout (Carbon Red 60)
 
 [theme.dark]
-base = "dark"
 primaryColor = "#4589ff"            # IBM Carbon Blue 50 (brighter for dark)
 linkColor = "#4589ff"
 backgroundColor = "#161616"         # IBM Carbon Gray 100

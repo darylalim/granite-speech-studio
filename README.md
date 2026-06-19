@@ -13,7 +13,7 @@ Transcribe and translate audio and video files using the IBM Granite 4.0 1B Spee
 - **Source language** — pick once; valid tasks update accordingly
 - **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
 - **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
-- **Themed UI** — cohesive IBM Carbon-inspired light theme
+- **Themed UI** — cohesive IBM Carbon-inspired theme with automatic light and dark modes
 - **Deferred loading** — models load on first pipeline run for instant page startup
 - **Export** — download per-task transcriptions and translations as text
 

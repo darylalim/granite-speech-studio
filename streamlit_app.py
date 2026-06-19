@@ -486,11 +486,15 @@ def main() -> None:
 
     vad_off_too_long = False
     if audio_file is not None and not use_segmentation:
-        # Cache per-file: getvalue() copies the full byte buffer each rerun.
-        duration_key = f"_duration_{audio_file.name}_{audio_file.size}"
-        if duration_key not in st.session_state:
-            st.session_state[duration_key] = audio_duration_seconds(audio_file)
-        duration = st.session_state[duration_key]
+        # Single-slot cache: getvalue() copies the full byte buffer each rerun,
+        # so memoize the duration and recompute only when the file changes. One
+        # slot can't grow, so no eviction is needed.
+        cache_id = (audio_file.name, audio_file.size)
+        cached = st.session_state.get("_duration")
+        if cached is None or cached[0] != cache_id:
+            cached = (cache_id, audio_duration_seconds(audio_file))
+            st.session_state["_duration"] = cached
+        duration = cached[1]
         if duration is not None and duration > MAX_VAD_OFF_DURATION_S:
             vad_off_too_long = True
             st.warning(
@@ -542,12 +546,6 @@ def main() -> None:
     )
     if input_key != st.session_state.get("_last_input_key"):
         for key in ("results", "result_stem", "result_source"):
-            st.session_state.pop(key, None)
-        # Evict stale per-file duration caches, keeping only the current file's.
-        keep = f"_duration_{audio_file.name}_{audio_file.size}" if audio_file else None
-        for key in [
-            k for k in st.session_state if k.startswith("_duration_") and k != keep
-        ]:
             st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 

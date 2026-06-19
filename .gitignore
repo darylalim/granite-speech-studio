@@ -9,4 +9,5 @@ dist/
 .streamlit/secrets.toml
 .claude/
 .venv/
-.env*
+.env
+.env.*.local

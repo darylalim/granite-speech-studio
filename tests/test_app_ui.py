@@ -28,6 +28,12 @@ def audio_bytes() -> bytes:
     return (AUDIO_DIR / "sample_10s.wav").read_bytes()
 
 
+@pytest.fixture
+def theme_config() -> dict:
+    """The parsed `[theme]` table from .streamlit/config.toml."""
+    return tomllib.loads(CONFIG.read_text())["theme"]
+
+
 def _app() -> AppTest:
     return AppTest.from_file(str(APP), default_timeout=60)
 
@@ -117,26 +123,23 @@ def test_vad_off_long_audio_disables_run(audio_bytes: bytes) -> None:
     assert vad_warning.icon == ":material/warning:"
 
 
-def test_duration_cache_evicts_stale_keys(audio_bytes: bytes) -> None:
-    """With VAD off, the per-file _duration_* session_state cache keeps only the
-    current file's entry — swapping files evicts the prior key, so it can't grow
-    unbounded across a session."""
+def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:
+    """With VAD off, the duration cache is a single `_duration` slot holding the
+    current file's ((name, size), duration) — swapping files overwrites it rather
+    than accumulating an entry per file, so it can't grow unbounded."""
+    size = len(audio_bytes)
     at = _app().run()
     at.toggle(key="use_segmentation").set_value(False)
     at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
     at.run()
-    size = len(audio_bytes)
-    duration_keys = [
-        k for k in at.session_state.filtered_state if k.startswith("_duration_")
-    ]
-    assert duration_keys == [f"_duration_a.wav_{size}"]
+    assert at.session_state["_duration"][0] == ("a.wav", size)
 
     at.file_uploader[0].set_value(("b.wav", audio_bytes, "audio/wav"))
     at.run()
-    duration_keys = [
-        k for k in at.session_state.filtered_state if k.startswith("_duration_")
-    ]
-    assert duration_keys == [f"_duration_b.wav_{size}"]
+    # Slot is overwritten in place, not accumulated.
+    assert at.session_state["_duration"][0] == ("b.wav", size)
+    duration_slots = [k for k in at.session_state.filtered_state if k == "_duration"]
+    assert duration_slots == ["_duration"]
 
 
 def test_run_renders_result_card(audio_bytes: bytes) -> None:
@@ -183,10 +186,10 @@ def test_run_renders_multiple_result_cards(audio_bytes: bytes) -> None:
     assert "bonjour le monde" in texts
 
 
-def test_theme_config_defines_light_and_dark() -> None:
+def test_theme_config_defines_light_and_dark(theme_config: dict) -> None:
     """config.toml defines both [theme.light] and [theme.dark] color palettes,
     which together enable the settings-menu light/dark toggle."""
-    theme = tomllib.loads(CONFIG.read_text())["theme"]
+    theme = theme_config
     assert "light" in theme and "dark" in theme
     for mode in ("light", "dark"):
         for key in (
@@ -199,7 +202,7 @@ def test_theme_config_defines_light_and_dark() -> None:
             assert key in theme[mode], f"theme.{mode}.{key} missing"
 
 
-def test_theme_config_has_no_invalid_options() -> None:
+def test_theme_config_has_no_invalid_options(theme_config: dict) -> None:
     """Every key under [theme] is a registered Streamlit config option. Guards
     against silently-dropped keys like the invalid `theme.light.base` (only
     `theme.base` exists; sub-themes have no `base`)."""
@@ -214,6 +217,5 @@ def test_theme_config_has_no_invalid_options() -> None:
             else:
                 yield full
 
-    theme = tomllib.loads(CONFIG.read_text())["theme"]
-    invalid = [k for k in walk("theme", theme) if k not in valid]
+    invalid = [k for k in walk("theme", theme_config) if k not in valid]
     assert invalid == [], f"invalid theme config options: {invalid}"

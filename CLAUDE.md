@@ -46,7 +46,7 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 
 `pyproject.toml` — ruff isort (`combine-as-imports`) and ty (`python-version = "3.12"`).
 
-`.streamlit/config.toml` — IBM Carbon-inspired light `[theme]` (colors only, no remote web fonts).
+`.streamlit/config.toml` — IBM Carbon-inspired `[theme]` with `[theme.light]` and `[theme.dark]` palettes (colors only, no remote web fonts). Mode-agnostic settings (radii, link/border options) live in `[theme]`; the per-mode color palettes enable the settings-menu light/dark toggle.
 
 ## Architecture
 
@@ -93,11 +93,11 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 - **Audio/video preview** — `st.video` for video containers, `st.audio` otherwise; selected via `is_video(filename)`. `st.caption` shows filename or "Recorded audio".
 - **Source language** — `st.segmented_control` (single-select), `English` default; drives the task option list via `build_tasks(source)`
 - **Task selection** — `st.pills` with `selection_mode="multi"`, label hidden, `Transcribe` preselected; widget keyed by source so options reset when source changes
-- **VAD segmentation** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("VAD segmentation", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, VAD model load is skipped and `run_pipeline` treats the full audio as a single segment. Part of `_last_input_key` so toggling invalidates cached results. When VAD is off and the audio is longer than `MAX_VAD_OFF_DURATION_S` (5 min), an `st.warning` is rendered and the Run button is disabled — the model's context window can't fit a longer clip in one inference.
-- **Keywords** — `st.markdown("Keywords", help=...)` label followed by `st.multiselect` with `accept_new_options=True`, `max_selections=15`, `label_visibility="collapsed"`, and placeholder `"Add keywords..."`. When non-empty, `apply_keywords` appends `Keywords: kw1, kw2, ...` to every prompt before inference. Part of `_last_input_key` (as `tuple(sorted(keywords))`) so changes invalidate cached results.
-- **Toxicity check** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("Toxicity check", help=...)` on the left, `st.toggle` defaulting to `True` on the right. When off, `compute_safety_tasks` returns an empty set so guardian model load and per-task safety check are both skipped. Part of `_last_input_key` so toggling invalidates cached results.
-- **Run button** — `st.button("Transcribe", type="primary", width="stretch")` placed in a right-aligned column via `st.columns([4, 1])`; disabled until audio is loaded and at least one task is selected
-- **Results** — pipeline results, stem, and source captured at run time in `st.session_state`; displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper
+- **VAD segmentation** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("**VAD segmentation**", help=...)` (bold faux-label) on the left, `st.toggle` defaulting to `True` on the right. When off, VAD model load is skipped and `run_pipeline` treats the full audio as a single segment. Part of `_last_input_key` so toggling invalidates cached results. When VAD is off and the audio is longer than `MAX_VAD_OFF_DURATION_S` (5 min), an `st.warning` is rendered and the Run button is disabled — the model's context window can't fit a longer clip in one inference.
+- **Keywords** — `st.markdown("**Keywords**", help=...)` bold faux-label followed by `st.multiselect` with `accept_new_options=True`, `max_selections=15`, `label_visibility="collapsed"`, and placeholder `"Add keywords..."`. When non-empty, `apply_keywords` appends `Keywords: kw1, kw2, ...` to every prompt before inference. Part of `_last_input_key` (as `tuple(sorted(keywords))`) so changes invalidate cached results.
+- **Toxicity check** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("**Toxicity check**", help=...)` (bold faux-label) on the left, `st.toggle` defaulting to `True` on the right. When off, `compute_safety_tasks` returns an empty set so guardian model load and per-task safety check are both skipped. Part of `_last_input_key` so toggling invalidates cached results.
+- **Run button** — `st.button("Transcribe", type="primary")` placed in a right-aligned `st.container(horizontal_alignment="right")` (content-width, no spacer column); disabled until audio is loaded and at least one task is selected
+- **Results** — pipeline results, stem, and source captured at run time in `st.session_state`; displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper. Each card is a bordered `st.container(border=True, height="stretch")` so cards in the same row share equal height (no ragged bottom edge when transcript lengths differ)
 - **Safety** — results show `st.success` (safe, `:material/check_circle:`) or `st.warning` (toxic, `:material/warning:`) banner with toxicity score whenever output is English (English source transcription, or X→English translation)
 
 ### Audio Formats
@@ -111,7 +111,7 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
-- `audio_duration_seconds` cached in `st.session_state` keyed by `(name, size)` so the upload buffer isn't re-copied on every rerun (matters for 500 MB uploads)
+- `audio_duration_seconds` cached in `st.session_state` keyed by `(name, size)` so the upload buffer isn't re-copied on every rerun (matters for 500 MB uploads); stale `_duration_*` keys are evicted in the `_last_input_key` invalidation block so at most the current file's entry survives
 - Guardian model runs on CPU with default dtype (125M params)
 - Silero VAD model runs on CPU (~3MB)
 - `max_tokens=512` per segment (prevents truncation on long speech)

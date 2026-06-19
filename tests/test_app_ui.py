@@ -105,9 +105,7 @@ def test_run_renders_result_card(audio_bytes: bytes) -> None:
     upstream MLX loader so no real model loads."""
     fake_model = MagicMock()
     fake_model.generate.return_value.text = "the quick brown fox (mocked)"
-    with patch(
-        "mlx_audio.stt.utils.load_model", return_value=fake_model
-    ) as loader:
+    with patch("mlx_audio.stt.utils.load_model", return_value=fake_model) as loader:
         at = _app().run()
         at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
         at.toggle(key="use_segmentation").set_value(False)

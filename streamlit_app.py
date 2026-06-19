@@ -380,7 +380,7 @@ def _row_sizes(n: int) -> list[int]:
 def _labeled_toggle(label: str, help: str, key: str, value: bool = True) -> bool:
     label_col, toggle_col = st.columns([15, 1], vertical_alignment="center")
     with label_col:
-        st.markdown(label, help=help)
+        st.markdown(f"**{label}**", help=help)
     with toggle_col:
         return st.toggle(label, value=value, label_visibility="collapsed", key=key)
 
@@ -395,7 +395,7 @@ def _render_result_card(
     title = result_title(source, task)
     is_transcription = task == "Transcribe"
     slug = result_slug(source, task)
-    with st.container(border=True):
+    with st.container(border=True, height="stretch"):
         st.subheader(title)
         st.text(transcript)
         if "is_toxic" in result:
@@ -405,9 +405,7 @@ def _render_result_card(
                     f"Toxic content detected ({score})", icon=":material/warning:"
                 )
             else:
-                st.success(
-                    f"Content is safe ({score})", icon=":material/check_circle:"
-                )
+                st.success(f"Content is safe ({score})", icon=":material/check_circle:")
         download_help = (
             "Download transcription" if is_transcription else "Download translation"
         )
@@ -474,9 +472,7 @@ def main() -> None:
         label_visibility="collapsed",
         key=f"tasks_{source}",
     )
-    selected_tasks: list[str] = [
-        t for t in selected_value if isinstance(t, str)
-    ]
+    selected_tasks: list[str] = [t for t in selected_value if isinstance(t, str)]
 
     use_segmentation = _labeled_toggle(
         "VAD segmentation",
@@ -500,11 +496,12 @@ def main() -> None:
             st.warning(
                 f"Enable VAD segmentation: audio is longer than "
                 f"{MAX_VAD_OFF_DURATION_S // 60} minutes, which exceeds the "
-                "model's per-call audio limit."
+                "model's per-call audio limit.",
+                icon=":material/warning:",
             )
 
     st.markdown(
-        "Keywords",
+        "**Keywords**",
         help=(
             "Up to 15 keywords to be boosted during transcription. "
             "Boosted terms are more likely to appear in the output."
@@ -546,21 +543,23 @@ def main() -> None:
     if input_key != st.session_state.get("_last_input_key"):
         for key in ("results", "result_stem", "result_source"):
             st.session_state.pop(key, None)
+        # Evict stale per-file duration caches, keeping only the current file's.
+        keep = f"_duration_{audio_file.name}_{audio_file.size}" if audio_file else None
+        for key in [
+            k for k in st.session_state if k.startswith("_duration_") and k != keep
+        ]:
+            st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 
     can_run = (
-        audio_file is not None
-        and len(selected_tasks) > 0
-        and not vad_off_too_long
+        audio_file is not None and len(selected_tasks) > 0 and not vad_off_too_long
     )
 
-    _, btn_col = st.columns([4, 1])
-    with btn_col:
+    with st.container(horizontal_alignment="right"):
         run_clicked = st.button(
             "Transcribe",
             type="primary",
             disabled=not can_run,
-            width="stretch",
         )
 
     if run_clicked and can_run:

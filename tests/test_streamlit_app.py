@@ -236,9 +236,13 @@ def test_compute_safety_tasks(
 @pytest.mark.parametrize(
     "source, task, expected",
     [
-        pytest.param("English", "Transcribe", "Transcribe (English)", id="en_transcribe"),
+        pytest.param(
+            "English", "Transcribe", "Transcribe (English)", id="en_transcribe"
+        ),
         pytest.param("German", "Transcribe", "Transcribe (German)", id="de_transcribe"),
-        pytest.param("Japanese", "Transcribe", "Transcribe (Japanese)", id="ja_transcribe"),
+        pytest.param(
+            "Japanese", "Transcribe", "Transcribe (Japanese)", id="ja_transcribe"
+        ),
         pytest.param("English", "French", "French", id="en_to_fr"),
         pytest.param("German", "English", "English", id="de_to_en"),
     ],
@@ -559,9 +563,7 @@ class TestCheckSafety:
         # 1099 tokens → 3 chunks (510, 510, 79). Aggregation must surface
         # the toxic middle chunk, not average it away.
         tokenizer = MagicMock()
-        tokenizer.return_value = {
-            "input_ids": torch.tensor([list(range(1, 1100))])
-        }
+        tokenizer.return_value = {"input_ids": torch.tensor([list(range(1, 1100))])}
         tokenizer.decode.return_value = "chunk text"
         safe = MagicMock(logits=torch.tensor([[5.0, -5.0]]))
         toxic = MagicMock(logits=torch.tensor([[-5.0, 5.0]]))
@@ -663,18 +665,14 @@ class TestRunPipeline:
     ) -> None:
         assert _run_pipeline(torch.zeros(1, 16000), {}, set(), *pipeline_mocks) == {}
 
-    def test_uses_correct_prompt_per_task(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
+    def test_uses_correct_prompt_per_task(self, pipeline_mocks: PipelineMocks) -> None:
         tasks = {
             "Transcribe": "transcribe prompt",
             "French": "translate to French",
             "German": "translate to German",
         }
         _run_pipeline(torch.zeros(1, 16000), tasks, {"Transcribe"}, *pipeline_mocks)
-        prompts = [
-            c[1]["prompt"] for c in pipeline_mocks.model.generate.call_args_list
-        ]
+        prompts = [c[1]["prompt"] for c in pipeline_mocks.model.generate.call_args_list]
         assert prompts == [
             "transcribe prompt",
             "translate to French",
@@ -837,9 +835,7 @@ class TestRunPipeline:
             )
         assert len(classification_calls(pipeline_mocks.guardian_tokenizer)) == 1
 
-    def test_segmentation_off_skips_vad(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
+    def test_segmentation_off_skips_vad(self, pipeline_mocks: PipelineMocks) -> None:
         with patch("streamlit_app.get_speech_segments") as mock_vad:
             _run_pipeline(
                 torch.zeros(1, 16000),
@@ -874,9 +870,7 @@ class TestRunPipeline:
     ) -> None:
         pipeline_mocks.model.generate.return_value = MagicMock(text=COT_TEXT)
         with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            _run_pipeline(
-                torch.zeros(1, 48000), COT_TASKS, set(), *pipeline_mocks
-            )
+            _run_pipeline(torch.zeros(1, 48000), COT_TASKS, set(), *pipeline_mocks)
         # 2 segments × {Transcribe + French} would be 4 calls without CoT;
         # CoT collapses each segment to a single shared inference.
         assert pipeline_mocks.model.generate.call_count == 2
@@ -1054,11 +1048,9 @@ class TestRenderResultCard:
     def test_renders_bordered_container(self, mock_st: MagicMock) -> None:
         result: PipelineResult = {"transcript": "hello"}
         _render_result_card("English", "Transcribe", result, "test")
-        mock_st.container.assert_called_once_with(border=True)
+        mock_st.container.assert_called_once_with(border=True, height="stretch")
 
-    def test_transcription_card_title_includes_source(
-        self, mock_st: MagicMock
-    ) -> None:
+    def test_transcription_card_title_includes_source(self, mock_st: MagicMock) -> None:
         result: PipelineResult = {"transcript": "hallo"}
         _render_result_card("German", "Transcribe", result, "test")
         mock_st.subheader.assert_called_once_with("Transcribe (German)")

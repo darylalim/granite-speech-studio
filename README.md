@@ -1,6 +1,6 @@
 # Granite Speech Studio
 
-Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX.
+Streamlit application for transcription and translation using IBM Granite Speech on Apple Silicon with MLX.
 
 ## Features
 

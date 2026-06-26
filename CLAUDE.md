@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Transcribe and translate audio and video files using the IBM Granite 4.0 1B Speech model on Apple Silicon with MLX. Streamlit web app with multi-task pipeline processing, VAD-based audio segmentation, and English toxicity detection.
+Streamlit application for transcription and translation using IBM Granite Speech on Apple Silicon with MLX. Multi-task pipeline processing, VAD-based audio segmentation, and English toxicity detection.
 
 ## Setup
 

@@ -13,6 +13,8 @@ uv sync
 uv run streamlit run streamlit_app.py
 ```
 
+Requires FFmpeg's shared libs at runtime (`brew install ffmpeg` on macOS) — `streamlit_app.py` imports `torchcodec`, which `dlopen`s FFmpeg at import time, so a fresh env without it crashes on startup.
+
 ## Commands
 
 - **Lint**: `uv run ruff check .`
@@ -21,6 +23,11 @@ uv run streamlit run streamlit_app.py
 - **Test**: `uv run pytest`
 
 When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `/astral:ty`, `/astral:ruff`) for uv, ty, and ruff to ensure best practices are followed.
+
+## Hooks & CI
+
+- `.claude/` hooks: a **Stop hook** (`check-on-stop.sh`) auto-runs `ruff check` + `ty check` + `pytest -q` and blocks turn completion on failure when `.py` files changed — no need to hand-run them at end of turn. A **PreToolUse hook** blocks edits to `uv.lock` (use `uv add`/`remove`/`lock`/`sync`). A **PostToolUse hook** (`ruff-on-edit.sh`) auto-`ruff format`s edited `.py` files (format only, not `check --fix`).
+- CI (`.github/workflows/ci.yml`): GitHub Actions on macOS, Python **3.12 and 3.13**, enforcing `uv sync --locked`, `ruff check`, `ruff format --check`, `ty check`, and `pytest`.
 
 ## Code Style
 
@@ -34,7 +41,7 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 - `mlx-audio` — MLX-based speech model loading and inference (Apple Silicon)
 - `transformers` — guardian model loading (toxicity detection)
 - `torch` — tensor operations (VAD, guardian model)
-- `torchaudio` — audio loading and resampling (for VAD preprocessing)
+- `torchaudio` — audio loading and resampling for the whole pipeline (16 kHz mono via `load_and_preprocess_audio`), including VAD preprocessing
 - `torchcodec` — audio decoding backend for torchaudio; also used directly via `AudioDecoder` for header-only duration reads
 - `silero-vad` — Voice Activity Detection for audio segmentation
 - `streamlit` — web user interface
@@ -71,6 +78,12 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 - `silero_vad` — runs Silero VAD on waveform, returns `(start, end)` tuples in seconds
 - `get_speech_segments` — post-processes VAD output with buffering and merging
 - `load_vad_model` — cached Silero VAD model loader
+- `load_model` — cached speech-model loader (MLX, via `mlx_audio`)
+- `load_guardian_model` — cached guardian loader; returns `(model, tokenizer)`
+- `load_and_preprocess_audio` — loads from `io.BytesIO` via `torchaudio`, downmixes to mono, resamples to `SAMPLE_RATE` (16 kHz); raises `RuntimeError` on failure
+- `transcribe_audio` — single `model.generate` call (`max_tokens=512`) on a waveform slice
+- `check_safety` — guardian toxicity check; returns `(is_toxic, rounded_score)`. Chunks inputs >510 tokens into windows and takes the max so long text isn't truncated by the guardian's 512-token cap
+- `_labeled_toggle` — bold faux-label + right-aligned `st.toggle` in a `st.columns([15, 1])` pair; renders the VAD and Toxicity controls
 - `run_pipeline` — takes `tasks: dict[str, str]` (task→prompt), `safety_tasks: set[str]`, and `use_segmentation: bool`; when segmentation is on, runs VAD then transcribes each segment; when off, treats the full audio as a single segment. When `tasks` includes `Transcribe` + exactly one translation target, automatically uses CoT-AST prompting (one inference per segment, parsed into both result cards; on parse failure re-runs a direct ASR call for the Transcribe card so untagged model output isn't mistakenly used as the transcription, and the translation iteration then makes its own direct AST call). Emits timestamped output and runs the safety check per segment for tasks in `safety_tasks` (empty segments skipped); the worst per-segment score is reported on the result card so long transcripts aren't silently truncated by the guardian's 512-token cap.
 
 ### Models
@@ -98,11 +111,12 @@ When working with Python, invoke the relevant `/astral:<skill>` (`/astral:uv`, `
 - **Toxicity check** — `st.columns([15, 1], vertical_alignment="center")`: `st.markdown("**Toxicity check**", help=...)` (bold faux-label) on the left, `st.toggle` defaulting to `True` on the right. When off, `compute_safety_tasks` returns an empty set so guardian model load and per-task safety check are both skipped. Part of `_last_input_key` so toggling invalidates cached results.
 - **Run button** — `st.button("Transcribe", type="primary")` placed in a right-aligned `st.container(horizontal_alignment="right")` (content-width, no spacer column); disabled until audio is loaded and at least one task is selected
 - **Results** — pipeline results, stem, and source captured at run time in `st.session_state`; displayed in a side-by-side column grid (up to 3 columns) via `_render_result_card` helper. Each card is a bordered `st.container(border=True, height="stretch")` so cards in the same row share equal height (no ragged bottom edge when transcript lengths differ)
-- **Safety** — results show `st.success` (safe, `:material/check_circle:`) or `st.warning` (toxic, `:material/warning:`) banner with toxicity score whenever output is English (English source transcription, or X→English translation)
+- **Run feedback** — during a run, an `st.progress` bar (`"Starting pipeline..."` → `"Processing: {task}..."`) with per-model `st.spinner`s for the speech/VAD/safety loads, then `st.toast("Pipeline complete!")` on success
+- **Safety** — results show `st.success` (safe, `:material/check_circle:`) or `st.warning` (toxic, `:material/warning:`) banner with toxicity score whenever output is English (English source transcription, or X→English translation). Output is flagged toxic when the score exceeds `TOXICITY_THRESHOLD = 0.5`; the reported score is rounded to `TOXICITY_SCORE_PRECISION = 4` decimal places
 
 ### Audio Formats
 
-Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted via torchcodec): mp4, mov, webm, mkv. `VIDEO_FORMATS` set drives conditional preview (`st.video` vs `st.audio`). Upload size limit raised to 500 MB in `.streamlit/config.toml`.
+Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted via torchcodec): mp4, mov, webm, mkv. `SUPPORTED_FORMATS` is the combined accepted-extension list passed to `st.file_uploader`; `VIDEO_FORMATS` is its video subset, driving conditional preview (`st.video` vs `st.audio`). Upload size limit raised to 500 MB in `.streamlit/config.toml`.
 
 ### Performance
 
@@ -111,6 +125,7 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 - `@st.cache_resource` to cache models
 - `@torch.inference_mode()` on safety check and pipeline (for guardian model)
 - `io.BytesIO` for in-memory audio loading (no temp files)
+- Audio downmixed to mono and resampled to `SAMPLE_RATE = 16000` Hz on load
 - `audio_duration_seconds` cached in a single `st.session_state["_duration"]` slot holding `((name, size), duration)` so the upload buffer isn't re-copied on every rerun (matters for 500 MB uploads); the slot is overwritten when the file changes, so it can't grow unbounded (no eviction needed)
 - Guardian model runs on CPU with default dtype (125M params)
 - Silero VAD model runs on CPU (~3MB)
@@ -127,7 +142,7 @@ Audio: wav, flac, m4a, mp3, ogg, aac. Video containers (audio track extracted vi
 
 ### Tests
 
-`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `apply_keywords`, `produces_english`, `compute_safety_tasks`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `_detect_cot_target`, `_cot_prompt`, `_parse_cot_output`, `silero_vad`, `get_speech_segments`, `audio_duration_seconds`, `_aggregate_segment_safety`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off, CoT-AST optimization with parse fallback, per-segment safety with max aggregation), and result card rendering. Repetitive cases use `pytest.mark.parametrize`. Shared `pipeline_mocks` fixture supplies the four pipeline mocks via a `NamedTuple` so tests can unpack with `*pipeline_mocks`. `TestRunPipeline` patches `get_speech_segments` via an autouse `pytest.fixture` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Decorator wrappers (`@st.cache_resource`, `@torch.inference_mode`) are bypassed via module-level `_load_model`, `_load_guardian_model`, `_load_vad_model`, `_run_pipeline` aliases pointing at `.__wrapped__`. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
+`tests/test_streamlit_app.py` — unit tests for constants, helpers (`build_tasks`, `apply_keywords`, `produces_english`, `compute_safety_tasks`, `result_title`, `result_slug`, `is_video`, `format_timestamp`, `_row_sizes`, `_detect_cot_target`, `_cot_prompt`, `_parse_cot_output`, `silero_vad`, `get_speech_segments`, `audio_duration_seconds`, `_aggregate_segment_safety`), model loaders, audio loading (wav + mp4 video), safety check, transcription, pipeline execution (multi-task, multi-segment, VAD on/off, CoT-AST optimization with parse fallback, per-segment safety with max aggregation), and result card rendering. Repetitive cases use `pytest.mark.parametrize`. Shared `pipeline_mocks` fixture supplies the four pipeline mocks via a `NamedTuple` so tests can unpack with `*pipeline_mocks`. `TestRunPipeline` patches `get_speech_segments` via an autouse `pytest.fixture` with a default single-segment fixture, and overrides it per-test for multi-segment cases. Decorator wrappers (`@st.cache_resource`, `@torch.inference_mode`) are bypassed via module-level `_load_model`, `_load_guardian_model`, `_load_vad_model`, `_run_pipeline` aliases pointing at `.__wrapped__`. Test fixtures in `tests/data/audio/` (`sample_10s.wav`, `sample_10s_video.mp4`).
 
 `tests/test_app_ui.py` — end-to-end UI tests driving the real `main()` widget tree via `streamlit.testing.v1.AppTest` (complements `test_streamlit_app.py`, which mocks `st` entirely and never exercises the UI wiring). Covers default widget state, the bold VAD/Toxicity/Keywords faux-labels, Run-button gating on audio + task presence, source-change task reset, the VAD-off long-audio warning (text + `:material/warning:` icon), the single-slot `_duration` cache (overwritten, not accumulated, on file swap), the `[theme.light]`/`[theme.dark]` config (both palettes present, every theme key a registered Streamlit option), and end-to-end Runs that render a single result card and the multi-card CoT-AST grid. AppTest re-executes `streamlit_app.py` in a fresh namespace on every `.run()`, so mocks must patch the **shared upstream imports** (`mlx_audio.stt.utils.load_model` for inference, `torchcodec.decoders.AudioDecoder` for header-only duration reads) rather than `streamlit_app.*` — patching `streamlit_app` attributes does not cross AppTest's script-runner boundary, and clicking Run without an upstream patch would load the real ~2.9GB speech model. An autouse fixture clears `st.cache_resource` before each test, since AppTest does not reset Streamlit's resource cache between instances. Pure-UI cases avoid clicking Run entirely.
 

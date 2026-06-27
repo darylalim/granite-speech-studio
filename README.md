@@ -1,6 +1,16 @@
 # Granite Speech Studio
 
+[![CI](https://github.com/darylalim/granite-speech-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/darylalim/granite-speech-studio/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+
 Streamlit application for transcription and translation using IBM Granite Speech on Apple Silicon with MLX.
+
+<p align="center">
+  <img src="docs/screenshot-light.png" alt="Granite Speech Studio transcribing an English clip and translating it to French (light theme)" width="49%">
+  <img src="docs/screenshot-dark.png" alt="Granite Speech Studio transcribing an English clip and translating it to French (dark theme)" width="49%">
+</p>
+<p align="center"><em>Transcription + French translation of a sample clip, shown in the light and dark themes.</em></p>
 
 ## Features
 
@@ -17,19 +27,38 @@ Streamlit application for transcription and translation using IBM Granite Speech
 - **Deferred loading** — models load on first pipeline run for instant page startup
 - **Export** — download per-task transcriptions and translations as text
 
+## How it works
+
+Three models run as a pipeline, loaded on first run and cached thereafter:
+
+| Model | Role | Runs on |
+|-------|------|---------|
+| [Granite 4.0 1B Speech (8-bit, MLX)](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit) | Transcription and translation | Apple GPU (MLX) |
+| [Silero VAD](https://github.com/snakers4/silero-vad) | Splits audio into speech segments | CPU |
+| [Granite Guardian HAP 125m](https://huggingface.co/ibm-granite/granite-guardian-hap-125m) | English toxicity detection | CPU |
+
+Audio is loaded and resampled to 16 kHz mono, optionally segmented with VAD, then transcribed and translated segment-by-segment on the GPU. English output (English-source transcription or translation into English) is scored for toxicity. Transcribe plus a single translation runs as one chain-of-thought inference per segment rather than two passes.
+
 ## Requirements
 
 - Apple Silicon Mac (M1/M2/M3/M4)
 - Python 3.12+
+- [uv](https://docs.astral.sh/uv/) — Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [FFmpeg](https://ffmpeg.org/) — `brew install ffmpeg` (required: `torchcodec` loads FFmpeg's shared libraries at import time, so the app won't start without it)
 
 ## Setup
 
 ```bash
+brew install ffmpeg   # required at runtime by torchcodec
 uv sync
 uv run streamlit run streamlit_app.py
 ```
 
+> First run downloads the Granite Speech model (~2.9 GB) plus the VAD and guardian models, then caches them; inference runs on the Apple Silicon GPU.
+
 ## Usage
+
+> New here? Try it with the bundled sample clip: `tests/data/audio/sample_10s.wav`.
 
 1. Upload an audio or video file, or record from your microphone
 2. Pick the source language of your audio
@@ -39,6 +68,35 @@ uv run streamlit run streamlit_app.py
 6. Optionally toggle **Toxicity check** (on by default)
 7. Click **Transcribe** to process all selected tasks
 8. View side-by-side results and download as text
+
+## Notes
+
+- **Apple Silicon only** — inference uses MLX; there's no CUDA or CPU-only fallback.
+- **Translation pivots through English** — English ↔ X only; no direct X → Y (e.g. French → German).
+- **Toxicity detection is English-only** (Granite Guardian HAP).
+- **Upload limit 500 MB**; with VAD off, clips are capped at 5 minutes (the model's context window).
+
+## Development
+
+```bash
+uv run ruff check .     # lint
+uv run ruff format .    # format
+uv run ty check         # type-check
+uv run pytest           # run tests
+```
+
+## Resources
+
+- [Granite 4.0 1B Speech (8-bit, MLX)](https://huggingface.co/mlx-community/granite-4.0-1b-speech-8bit) — model card
+- [Granite Speech collection](https://huggingface.co/collections/ibm-granite/granite-speech)
+- [Technical report](https://arxiv.org/abs/2505.08699)
+
+## Acknowledgements
+
+- [IBM Granite](https://huggingface.co/ibm-granite) — Speech and Guardian models
+- [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection
+- [Apple MLX](https://github.com/ml-explore/mlx) and [mlx-audio](https://github.com/Blaizzy/mlx-audio) — on-device inference
+- [Streamlit](https://streamlit.io/) — web UI
 
 ## License
 

@@ -7,7 +7,9 @@ dist/
 .ruff_cache/
 .ty_cache/
 .streamlit/secrets.toml
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 .venv/
 .env
 .env.*.local

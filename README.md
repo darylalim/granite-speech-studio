@@ -39,3 +39,7 @@ uv run streamlit run streamlit_app.py
 6. Optionally toggle **Toxicity check** (on by default)
 7. Click **Transcribe** to process all selected tasks
 8. View side-by-side results and download as text
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for third-party attributions.

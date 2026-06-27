@@ -1,0 +1,17 @@
+Granite Speech Studio
+Copyright 2026 Daryl Lim
+
+Licensed under the Apache License, Version 2.0 (the "License").
+
+This application uses, but does not redistribute, the following third-party
+models and libraries, each under its own license:
+
+- IBM Granite 4.0 1B Speech (Apache-2.0)
+- IBM Granite Guardian HAP 125m (Apache-2.0)
+- Silero VAD (MIT)
+- MLX / mlx-audio (MIT)
+- Streamlit, Hugging Face Transformers (Apache-2.0)
+- PyTorch, torchaudio, torchcodec (BSD-3-Clause)
+
+Model weights are downloaded at runtime from the Hugging Face Hub and are
+not included in this repository.

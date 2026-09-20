@@ -184,14 +184,15 @@ def test_run_button_gating(audio_bytes: bytes) -> None:
     assert at.caption[0].value == "sample_10s.wav"
 
 
-@pytest.mark.parametrize(("duration", "blocked"), [(3601.0, True), (3599.0, False)])
+@pytest.mark.parametrize(("duration", "blocked"), [(1801.0, True), (1799.0, False)])
 def test_vad_off_long_audio_gates_run(
     audio_bytes: bytes, duration: float, blocked: bool
 ) -> None:
     """With VAD off, audio over MAX_VAD_OFF_DURATION_S disables Run behind a
-    warning; just under it, neither. The boundary is pinned at one hour on
-    purpose: the message's "8 GB" is what a single inference measured at
-    exactly that length, so retuning the constant has to retune the text."""
+    warning; just under it, neither. The boundary is pinned at 30 minutes on
+    purpose: the message's "4 GB" is what a single inference measured at
+    exactly that length (4.5 GB of MLX memory, before the decoded audio the
+    process also holds), so retuning the constant has to retune the text."""
     with patch("torchcodec.decoders.AudioDecoder") as decoder:
         decoder.return_value.metadata.duration_seconds = duration
         at = _app().run()
@@ -202,8 +203,8 @@ def test_vad_off_long_audio_gates_run(
     assert at.button[0].disabled is blocked
     if blocked:
         (vad_warning,) = at.warning
-        assert "longer than 60 minutes" in vad_warning.value
-        assert "more than 8 GB" in vad_warning.value
+        assert "longer than 30 minutes" in vad_warning.value
+        assert "more than 4 GB" in vad_warning.value
         assert vad_warning.icon == ":material/warning:"
     else:
         assert len(at.warning) == 0

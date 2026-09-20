@@ -14,7 +14,7 @@ Streamlit application for English speech transcription using IBM Granite Speech 
 ## Features
 
 - **Transcription** — English, with IBM Granite Speech 5.0 TurboCTC (470M, encoder-only, greedy CTC); output is lowercase and unpunctuated
-- **VAD segmentation** — automatic speech detection with timestamped per-segment output, capped at 30 s per segment so timestamps stay readable (togglable; disable to process whole audio in one pass; auto-required for audio over 60 minutes)
+- **VAD segmentation** — automatic speech detection with timestamped per-segment output, about 30 s per segment so timestamps stay readable — up to ~40 s for unbroken speech, since a forced split costs more than the overshoot (togglable; disable to process whole audio in one pass; auto-required for audio over 30 minutes)
 - **Toxicity check** — togglable (on by default); surfaces the worst per-segment toxicity score via Granite Guardian HAP 125m — always applies, since the output is always English
 - **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
 - **Light and dark modes** — Streamlit's built-in themes; follows the system setting, switchable from the app's settings menu
@@ -66,7 +66,7 @@ uv run streamlit run streamlit_app.py
 - **English only** — Granite Speech 5.0 TurboCTC is an English ASR model; there is no translation and no other source language.
 - **Output is lowercase and unpunctuated** — the model's training transcripts were normalised that way, and the app does not restore casing or punctuation.
 - **Toxicity detection is English-only** (Granite Guardian HAP) — which is every transcription here; turn the check off to skip loading the guardian.
-- **Upload limit 500 MB**; with VAD off, clips are capped at 60 minutes — memory grows linearly with clip length (about 2 MB per second of audio), and a single inference over an hour already peaks around 8 GB.
+- **Upload limit 500 MB**; with VAD off, clips are capped at 30 minutes — memory grows linearly with clip length (about 2 MB per second of audio), and a single inference over 30 minutes already peaks around 4.5 GB before counting the decoded audio held alongside it.
 
 ## Development
 

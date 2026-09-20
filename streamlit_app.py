@@ -101,9 +101,14 @@ VAD_ENCODER_BATCH_CHUNKS = 2048
 # of, and the model transcribed an hour of continuous speech in one pass with
 # no drift. Measured peak MLX memory (fresh process per run, bf16 weights =
 # 0.88 GB resident): 10s -> 1.1 GB, 60s -> 1.7 GB, 300s -> 2.0 GB,
-# 1200s -> 3.4 GB, 3600s -> 7.8 GB — linear at ~2 MB per second of audio.
-# One hour keeps a 16 GB Mac out of swap; two would not.
-MAX_VAD_OFF_DURATION_S = 3600
+# 1200s -> 3.4 GB, 1800s -> 4.5 GB, 3600s -> 7.8 GB — linear at ~2 MB per
+# second of audio. That series is MLX alone: the Streamlit process also
+# holds torchaudio's decode at the *source* rate and channel count (a 48 kHz
+# stereo hour is ~1.4 GB float32 before the mono and 16 kHz copies), the
+# upload bytes, the guardian and the torch/transformers baseline, so an hour
+# would land past 10 GB in-process. 30 minutes keeps the whole process
+# around 7 GB on a 16 GB Mac; with VAD on there is no such ceiling at all.
+MAX_VAD_OFF_DURATION_S = 1800
 # Target length for a segment fed to a single inference when VAD is on.
 # Merging in get_speech_segments never exceeds it, but an unbroken VAD span
 # (or the no-speech fallback) up to just under 2 x MIN_SEGMENT_DURATION_S
@@ -617,8 +622,11 @@ def run_pipeline(
     for step, seg in enumerate(segments):
         if on_progress:
             on_progress(step, total_steps, f"segment {step + 1} of {total_steps}")
-        start_sample = int(seg["start"] * SAMPLE_RATE)
-        end_sample = int(seg["end"] * SAMPLE_RATE)
+        # round(), not int(): the unsegmented path derives seg["end"] as
+        # N / SAMPLE_RATE, and truncating that float round-trip drops the last
+        # sample for ~0.6% of clip lengths (2002, 2006, ...).
+        start_sample = round(seg["start"] * SAMPLE_RATE)
+        end_sample = round(seg["end"] * SAMPLE_RATE)
         text = transcribe_audio(wav[:, start_sample:end_sample], model)
         raw_texts.append(text)
         ts_start = format_timestamp(seg["start"])
@@ -714,8 +722,7 @@ def main() -> None:
         "VAD segmentation",
         help=(
             "Splits audio into speech segments with timestamps using "
-            "Silero VAD. Disable to process the whole audio in one pass, "
-            "without timestamps."
+            "Silero VAD. Disable to process the whole audio in one pass."
         ),
         key="use_segmentation",
     )
@@ -736,7 +743,8 @@ def main() -> None:
             st.warning(
                 f"Enable VAD segmentation: audio is longer than "
                 f"{MAX_VAD_OFF_DURATION_S // 60} minutes. A single inference "
-                "that long needs more than 8 GB of memory.",
+                "that long needs more than 4 GB of memory on top of the "
+                "decoded audio.",
                 icon=":material/warning:",
             )
 
@@ -769,9 +777,12 @@ def main() -> None:
         assert audio_file is not None
         progress = st.progress(0, text="Starting pipeline...")
         try:
+            # Audio before the model: every decode-time RuntimeError (unreadable
+            # file, zero samples, under the 70 ms floor) then surfaces at once,
+            # instead of after a ~0.95 GB Hub fetch on a cold cache.
+            wav = load_and_preprocess_audio(audio_file)
             with st.spinner("Loading speech model..."):
                 model = load_model(MODEL_ID, MODEL_REVISION)
-            wav = load_and_preprocess_audio(audio_file)
 
             if use_segmentation:
                 with st.spinner("Loading VAD model..."):

@@ -151,12 +151,14 @@ def test_supported_formats() -> None:
     assert VIDEO_FORMATS.issubset(set(SUPPORTED_FORMATS))
 
 
-def test_max_vad_off_duration_is_one_hour() -> None:
+def test_max_vad_off_duration_is_thirty_minutes() -> None:
     # Memory is the only bound on the single-inference path: attention is
     # block-local so there is no context to run out of, and peak MLX memory
-    # grows linearly at ~2 MB per second of audio — measured 7.8 GB at one
-    # hour. That keeps a 16 GB Mac out of swap; two hours would not.
-    assert MAX_VAD_OFF_DURATION_S == 3600
+    # grows linearly at ~2 MB per second of audio — measured 4.5 GB at 30
+    # minutes and 7.8 GB at an hour. MLX is not the whole process, though:
+    # torchaudio's decode at the source rate, the guardian and the torch
+    # baseline sit alongside it, which is what rules the hour out on 16 GB.
+    assert MAX_VAD_OFF_DURATION_S == 1800
 
 
 def test_mlx_vad_revision_is_pinned() -> None:
@@ -1034,11 +1036,21 @@ class TestRunPipeline:
             )
         mock_vad.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "samples",
+        [
+            48000,  # 3 seconds at 16 kHz
+            # N / SAMPLE_RATE * SAMPLE_RATE lands a hair under N in floating
+            # point for this and ~0.6% of other lengths; int() then fed
+            # N - 1 samples, so this pins the round() conversion.
+            2002,
+        ],
+    )
     def test_segmentation_off_uses_full_audio(
-        self, pipeline_mocks: PipelineMocks
+        self, pipeline_mocks: PipelineMocks, samples: int
     ) -> None:
         result = _run_pipeline(
-            torch.zeros(1, 48000),  # 3 seconds at 16 kHz
+            torch.zeros(1, samples),
             pipeline_mocks.model,
             None,
             pipeline_mocks.guardian,
@@ -1046,8 +1058,11 @@ class TestRunPipeline:
             use_segmentation=False,
         )
         pipeline_mocks.model.generate.assert_called_once()
-        assert pipeline_mocks.model.generate.call_args.kwargs["audio"].shape == (48000,)
-        assert result["transcript"] == "[0:00 - 0:03] decoded text"
+        assert pipeline_mocks.model.generate.call_args.kwargs["audio"].shape == (
+            samples,
+        )
+        expected_end = format_timestamp(samples / SAMPLE_RATE)
+        assert result["transcript"] == f"[0:00 - {expected_end}] decoded text"
 
     def test_progress_sequence_ends_with_the_safety_pass(
         self, pipeline_mocks: PipelineMocks

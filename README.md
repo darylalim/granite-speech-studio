@@ -6,6 +6,11 @@
 
 Streamlit application for English speech transcription using IBM Granite Speech 5.0 TurboCTC on Apple Silicon with MLX.
 
+<p align="center">
+  <img src="docs/screenshot-dark.png" alt="Granite Speech Studio in dark mode, showing a timestamped transcription of the sample clip with a toxicity check result" width="70%">
+</p>
+<p align="center"><em>Timestamped transcription of the sample clip, in dark mode.</em></p>
+
 ## Features
 
 - **Transcription** — English, with IBM Granite Speech 5.0 TurboCTC (470M, encoder-only, greedy CTC); output is lowercase and unpunctuated

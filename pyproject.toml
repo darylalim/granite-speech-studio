@@ -1,13 +1,13 @@
 [project]
 name = "granite-speech-studio"
 version = "0.11.0"
-description = "Streamlit application for transcription and translation using IBM Granite Speech on Apple Silicon with MLX."
+description = "Streamlit application for English speech transcription using IBM Granite Speech 5.0 TurboCTC on Apple Silicon with MLX."
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Daryl Lim" }]
 dependencies = [
-    "mlx-audio",
+    "mlx-audio>=0.5.1",
     "silero-vad",
     "streamlit",
     "torch",

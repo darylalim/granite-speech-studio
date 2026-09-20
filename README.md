@@ -4,27 +4,17 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 
-Streamlit application for transcription and translation using IBM Granite Speech on Apple Silicon with MLX.
-
-<p align="center">
-  <img src="docs/screenshot-dark.png" alt="Granite Speech Studio in dark mode, transcribing an English clip and translating it to French" width="70%">
-</p>
-<p align="center"><em>Transcription + French translation of a sample clip, in dark mode.</em></p>
+Streamlit application for English speech transcription using IBM Granite Speech 5.0 TurboCTC on Apple Silicon with MLX.
 
 ## Features
 
-- **Pipeline processing** — run multiple transcription and translation tasks on the same audio in one pass over the file
-- **Transcription** — English, French, German, Spanish, Portuguese, Japanese
-- **Translation** — English ↔ French, German, Spanish, Portuguese, Italian, Japanese, Mandarin Chinese (Italian and Mandarin: English source only)
-- **Keywords** — bias recognition toward up to 15 user-provided terms (proper nouns, acronyms, jargon)
-- **VAD segmentation** — automatic speech detection with timestamped per-segment output, capped at 8s per segment so translation stays accurate on continuous speech (togglable; disable to process whole audio in one pass; auto-required for audio over 2 minutes)
-- **Toxicity check** — togglable (on by default); surfaces the worst per-segment toxicity score on any output that may be English via Granite Guardian HAP 125m
-- **Source language** — pick once; valid tasks update accordingly
+- **Transcription** — English, with IBM Granite Speech 5.0 TurboCTC (470M, encoder-only, greedy CTC); output is lowercase and unpunctuated
+- **VAD segmentation** — automatic speech detection with timestamped per-segment output, capped at 30 s per segment so timestamps stay readable (togglable; disable to process whole audio in one pass; auto-required for audio over 60 minutes)
+- **Toxicity check** — togglable (on by default); surfaces the worst per-segment toxicity score via Granite Guardian HAP 125m — always applies, since the output is always English
 - **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
-- **Side-by-side results** — compare outputs in a column grid (up to 3 columns)
 - **Light and dark modes** — Streamlit's built-in themes; follows the system setting, switchable from the app's settings menu
 - **Deferred loading** — models load on first pipeline run for instant page startup
-- **Export** — download per-task transcriptions and translations as text
+- **Export** — download the transcription as text
 
 ## How it works
 
@@ -32,11 +22,11 @@ Three models run as a pipeline, loaded on first run and cached thereafter:
 
 | Model | Role | Runs on |
 |-------|------|---------|
-| [Granite Speech 4.1 2B (8-bit, MLX)](https://huggingface.co/divydeep/granite-speech-4.1-2b-mlx-8bit) | Transcription and translation | Apple GPU (MLX) |
+| [Granite Speech 5.0 470M TurboCTC](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) | English transcription | Apple GPU (MLX) |
 | [Silero VAD v6](https://huggingface.co/mlx-community/silero-vad-v6) | Splits audio into speech segments | Apple GPU (MLX) |
 | [Granite Guardian HAP 125m](https://huggingface.co/ibm-granite/granite-guardian-hap-125m) | English toxicity detection | CPU |
 
-Audio is loaded and resampled to 16 kHz mono, optionally segmented with VAD, then transcribed and translated segment-by-segment on the GPU. VAD runs on the GPU too, batching its encoder across chunks so a whole clip costs a couple of model calls rather than one per 32 ms; it falls back to the PyTorch build of the same checkpoint, on CPU, if the MLX weights are unavailable. Each segment is encoded once and reused across every selected task, so N tasks cost one audio encode rather than N. Any output that may be English is scored for toxicity.
+Audio is loaded and resampled to 16 kHz mono, optionally segmented with VAD, then transcribed segment-by-segment on the GPU — one encoder pass and a greedy CTC collapse per segment, with no prompt and no decoder. VAD runs on the GPU too, batching its encoder across chunks so a whole clip costs a couple of model calls rather than one per 32 ms; it falls back to the PyTorch build of the same checkpoint, on CPU, if the MLX weights are unavailable. With the toxicity check on, every segment's transcript is scored and the worst score is reported.
 
 ## Requirements
 
@@ -53,28 +43,25 @@ uv sync
 uv run streamlit run streamlit_app.py
 ```
 
-> First run downloads the Granite Speech model (~3.3 GB) plus the VAD and guardian models, then caches them; inference runs on the Apple Silicon GPU.
+> First run downloads the Granite Speech model (~0.9 GB) plus the VAD and guardian models, then caches them; inference runs on the Apple Silicon GPU.
 
 ## Usage
 
 > New here? Try it with the bundled sample clip: `tests/data/audio/sample_10s.wav`.
 
 1. Upload an audio or video file, or record from your microphone
-2. Pick the source language of your audio
-3. Pick tasks (transcribe, translate to a language)
-4. Optionally toggle **VAD segmentation** (on by default)
-5. Optionally add **Keywords** (proper nouns, acronyms, jargon)
-6. Optionally toggle **Toxicity check** (on by default)
-7. Click **Transcribe** to process all selected tasks
-8. View side-by-side results and download as text
+2. Optionally toggle **VAD segmentation** (on by default)
+3. Optionally toggle **Toxicity check** (on by default)
+4. Click **Transcribe**
+5. Read the timestamped transcript and download it as text
 
 ## Notes
 
 - **Apple Silicon only** — inference uses MLX; there's no CUDA or CPU-only fallback.
-- **Translation pivots through English** — English ↔ X only; no direct X → Y (e.g. French → German).
-- **Toxicity detection is English-only** (Granite Guardian HAP). Because English audio can come back untranslated, every task is checked when the source is English; non-English sources are checked only for translations into English.
-- **Upload limit 500 MB**; with VAD off, clips are capped at 2 minutes — a single inference that long already peaks around 14 GB of memory.
-- **Translation needs VAD on.** Past roughly 20 seconds in one pass the model stops translating and echoes the source language back verbatim, with no error. VAD segmentation keeps every chunk under 8s, which is why it defaults to on.
+- **English only** — Granite Speech 5.0 TurboCTC is an English ASR model; there is no translation and no other source language.
+- **Output is lowercase and unpunctuated** — the model's training transcripts were normalised that way, and the app does not restore casing or punctuation.
+- **Toxicity detection is English-only** (Granite Guardian HAP) — which is every transcription here; turn the check off to skip loading the guardian.
+- **Upload limit 500 MB**; with VAD off, clips are capped at 60 minutes — memory grows linearly with clip length (about 2 MB per second of audio), and a single inference over an hour already peaks around 8 GB.
 
 ## Development
 
@@ -87,10 +74,10 @@ uv run pytest           # run tests
 
 ## Resources
 
-- [Granite Speech 4.1 2B](https://huggingface.co/ibm-granite/granite-speech-4.1-2b) — IBM's model card
-- [Granite Speech 4.1 2B (8-bit, MLX)](https://huggingface.co/divydeep/granite-speech-4.1-2b-mlx-8bit) — the community MLX conversion this app loads
+- [Granite Speech 5.0 470M TurboCTC](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) — IBM's model card, and the repo this app loads
+- [Design of the IBM Granite 5.0 TurboCTC ASR Model](https://arxiv.org/abs/2609.20104) — the paper
+- [mlx-audio `granite_speech5_ctc`](https://github.com/Blaizzy/mlx-audio/tree/main/mlx_audio/stt/models/granite_speech5_ctc) — the MLX port this app runs
 - [Granite Speech collection](https://huggingface.co/collections/ibm-granite/granite-speech)
-- [Technical report](https://arxiv.org/abs/2505.08699)
 
 ## Acknowledgements
 

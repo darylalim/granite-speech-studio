@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License").
 This application uses, but does not redistribute, the following third-party
 models and libraries, each under its own license:
 
-- IBM Granite 4.0 1B Speech (Apache-2.0)
+- IBM Granite Speech 5.0 470M TurboCTC (Apache-2.0)
 - IBM Granite Guardian HAP 125m (Apache-2.0)
 - Silero VAD (MIT)
 - MLX / mlx-audio (MIT)

@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import av
 import mlx.core as mx
@@ -35,6 +35,7 @@ from streamlit_app import (
     VIDEO_FORMATS,
     PipelineResult,
     _decode_audio,
+    _labeled_toggle,
     _mlx_vad_probabilities,
     _mlx_vad_windows,
     _render_result_card,
@@ -1268,7 +1269,72 @@ class TestRenderResultCard:
     ) -> None:
         result: PipelineResult = {"transcript": "hello"}
         _render_result_card(result, "test")
-        mock_st.container.assert_called_once_with(border=True)
+        # The bordered card, then the header row inside it that floats the
+        # download button to the right edge with a stretch space.
+        assert mock_st.container.call_args_list == [
+            call(border=True),
+            call(horizontal=True, vertical_alignment="center"),
+        ]
+        mock_st.space.assert_called_once_with("stretch")
         # height="stretch" existed to equalise cards across a row of the result
         # grid; with a single card there is no row to equalise.
-        assert "height" not in mock_st.container.call_args.kwargs
+        assert all("height" not in c.kwargs for c in mock_st.container.call_args_list)
+
+    def test_download_button_is_in_the_header_row(self, mock_st: MagicMock) -> None:
+        # Header row, not under the text: on a long transcript a button below
+        # the text is a few hundred lines below the fold.
+        result: PipelineResult = {"transcript": "hello"}
+        _render_result_card(result, "test")
+        # The full call sequence, not a filtered one: a button emitted after
+        # the row closes, or a space emitted after the button, would pass an
+        # order check over {subheader, download_button, text} alone.
+        assert [name for name, _args, _kwargs in mock_st.mock_calls] == [
+            "container",
+            "container().__enter__",  # the bordered card
+            "container",
+            "container().__enter__",  # the header row
+            "subheader",
+            "space",  # before the button, so it floats the button right
+            "download_button",
+            "container().__exit__",  # the row closes with the button inside
+            "text",
+            "container().__exit__",
+        ]
+
+
+@patch("streamlit_app.st")
+class TestLabeledToggle:
+    def test_is_a_horizontal_row_with_a_stretch_space(self, mock_st: MagicMock) -> None:
+        # A horizontal container with a stretch space between label and switch,
+        # not st.columns([15, 1]): in the 300px sidebar a 1/16 column is ~15px,
+        # narrower than the switch itself.
+        _labeled_toggle("VAD segmentation", help="help text", key="use_segmentation")
+        mock_st.container.assert_called_once_with(
+            horizontal=True, vertical_alignment="center"
+        )
+        mock_st.columns.assert_not_called()
+        mock_st.markdown.assert_called_once_with(
+            "**VAD segmentation**", help="help text"
+        )
+        mock_st.space.assert_called_once_with("stretch")
+        mock_st.toggle.assert_called_once_with(
+            "VAD segmentation",
+            value=True,
+            label_visibility="collapsed",
+            key="use_segmentation",
+        )
+        # Order matters: the space has to sit between label and switch to
+        # float the switch right; label → switch → space packs them together.
+        assert [name for name, _args, _kwargs in mock_st.mock_calls] == [
+            "container",
+            "container().__enter__",
+            "markdown",
+            "space",
+            "toggle",
+            "container().__exit__",
+        ]
+
+    def test_returns_the_toggle_value(self, mock_st: MagicMock) -> None:
+        mock_st.toggle.return_value = False
+        assert _labeled_toggle("x", help="h", key="k", value=False) is False
+        assert mock_st.toggle.call_args.kwargs["value"] is False

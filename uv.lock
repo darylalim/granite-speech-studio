@@ -446,7 +446,7 @@ requires-dist = [
     { name = "av", specifier = ">=18.1.0" },
     { name = "mlx-audio", specifier = ">=0.5.1" },
     { name = "silero-vad", specifier = "==6.2.1" },
-    { name = "streamlit", specifier = ">=1.52.0" },
+    { name = "streamlit", specifier = ">=1.51.0" },
     { name = "torch" },
     { name = "torchaudio" },
 ]

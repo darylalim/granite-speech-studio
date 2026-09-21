@@ -12,6 +12,13 @@ The Run tests are hermetic: the speech model is stubbed at its loader, and the
 MLX VAD loader is made to fail so load_vad_model takes its documented fallback
 onto the PyTorch build that ships inside the silero-vad wheel — real VAD spans
 on the fixture, nothing downloaded.
+
+Layout assertions go through `at.sidebar`, `at.main` and the two `at.columns`
+rather than the whole-tree accessors: AppTest walks main before the sidebar
+and the input column before the transcript column, so `at.caption[0]` would
+keep resolving to the filename only for as long as nothing rendered a caption
+above it. Saying where an element lives makes the test document the layout
+instead of depending on iteration order.
 """
 
 import tomllib
@@ -26,9 +33,10 @@ import av
 import pytest
 import streamlit as st
 from streamlit import config
+from streamlit.proto.Block_pb2 import Block
 from streamlit.testing.v1 import AppTest
 
-from streamlit_app import MODEL_ID, MODEL_REVISION
+from streamlit_app import MODEL_ID, MODEL_REVISION, TRANSCRIPT_MAX_WIDTH_PX
 
 APP = Path(__file__).parent.parent / "streamlit_app.py"
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
@@ -122,7 +130,7 @@ def _upload_and_run(audio_bytes: bytes, *, use_segmentation: bool) -> AppTest:
     at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
     at.toggle(key="use_segmentation").set_value(use_segmentation)
     at.run()
-    at.button[0].click()
+    at.button(key="transcribe").click()
     at.run()
     return at
 
@@ -140,6 +148,35 @@ def _assert_single_result_card(at: AppTest) -> None:
     assert download.help == "Download transcription"
     assert download.icon == ":material/download:"
     assert at.session_state["result_stem"] == "sample_10s"
+    # The card is in the transcript slot — the width-capped container in the
+    # right column — and the slot holds nothing else: the next-step hint is
+    # gone, and the input column has the player's filename and no card parts.
+    # Block accessors recurse, so the column's containers are the slot, the
+    # bordered card inside it and the card's header row. Picked by property
+    # rather than unpacked by count, so a Streamlit release that renders a
+    # spinner or an emptied progress bar as a block fails a named assertion
+    # instead of a ValueError on the unpack.
+    assert len(at.info) == 0
+    input_col, transcript = at.columns
+    containers = transcript.container
+    (slot,) = [
+        c
+        for c in containers
+        if c.proto.width_config.pixel_width == TRANSCRIPT_MAX_WIDTH_PX
+    ]
+    (card,) = [c for c in containers if c.proto.flex_container.border]
+    (header,) = [
+        c
+        for c in containers
+        if c.proto.flex_container.direction == Block.FlexContainer.HORIZONTAL
+    ]
+    assert [s.value for s in header.subheader] == ["Transcription"]
+    assert len(header.download_button) == 1
+    assert len(card.text) == 1
+    assert len(slot.caption) == 0
+    assert [c.value for c in input_col.caption] == ["sample_10s.wav"]
+    assert len(input_col.subheader) == 0
+    assert len(input_col.download_button) == 0
 
 
 def test_default_state() -> None:
@@ -155,19 +192,83 @@ def test_default_state() -> None:
     assert {t.key for t in at.toggle} == {"use_segmentation"}
     assert all(t.value is True for t in at.toggle)
     # Run is disabled until audio is loaded.
-    assert at.button[0].disabled is True
+    assert at.button(key="transcribe").disabled is True
     assert len(at.subheader) == 0
     assert "result" not in at.session_state
 
 
-def test_description_names_the_loaded_model() -> None:
-    """The description links the model card of the model the app actually
-    loads, and says English — the CTC model transcribes nothing else."""
+def test_page_config_is_wide() -> None:
+    """layout="wide" is the premise of the two-column workspace. The sidebar
+    state is left at its default ("auto"): it holds a setting and the model
+    name, nothing a run depends on, so collapsing it in a narrow window
+    loses nothing. AppTest does not keep the PageConfig message — it is not
+    a delta — so the call on the shared streamlit module is observed."""
+    with patch("streamlit.set_page_config") as page_config:
+        at = _app().run()
+    assert not at.exception
+    page_config.assert_called_once_with(
+        page_title="Granite Speech Studio",
+        page_icon=":material/graphic_eq:",
+        layout="wide",
+    )
+
+
+def test_sidebar_holds_settings_and_app_info_only() -> None:
+    """The sidebar is the VAD toggle and the model caption, nothing else; the
+    whole run flow — input tabs, Transcribe, the player and the transcript —
+    is in main, where it stays visible when the sidebar is collapsed."""
     at = _app().run()
-    description = at.markdown[0].value
-    assert f"https://huggingface.co/{MODEL_ID}" in description
-    assert "granite-speech-5.0-470m-turboctc" in description
-    assert "English" in description
+    assert not at.exception
+    assert {t.key for t in at.sidebar.toggle} == {"use_segmentation"}
+    assert len(at.sidebar.caption) == 1
+    assert len(at.sidebar.file_uploader) == 0
+    # audio_input has no typed accessor on AppTest; get() filters by proto type.
+    assert len(at.sidebar.get("audio_input")) == 0
+    assert len(at.sidebar.button) == 0
+    assert len(at.sidebar.title) == 0
+    assert len(at.main.file_uploader) == 1
+    assert len(at.main.get("audio_input")) == 1
+    assert [b.label for b in at.main.button] == ["Transcribe"]
+    assert len(at.main.toggle) == 0
+    assert [t.value for t in at.main.title] == ["Granite Speech Studio"]
+
+
+def test_empty_state_keeps_the_grid() -> None:
+    """With nothing loaded the two-column grid is already in place — the
+    uploader and the disabled Run in the input column, a one-line caption in
+    the transcript slot — so nothing moves when a file lands. No alert box:
+    the uploader itself is the call to action."""
+    at = _app().run()
+    assert not at.exception
+    assert len(at.info) == 0
+    input_col, transcript = at.columns
+    assert len(input_col.file_uploader) == 1
+    assert [b.disabled for b in input_col.button] == [True]
+    assert len(input_col.get("audio")) == 0  # no player...
+    assert len(input_col.caption) == 0  # ...so no filename under it
+    (slot,) = transcript.container
+    assert slot.proto.width_config.pixel_width == TRANSCRIPT_MAX_WIDTH_PX
+    (hint,) = slot.caption
+    assert "Upload or record" in hint.value
+
+
+def test_sidebar_caption_names_the_loaded_model() -> None:
+    """The sidebar caption links the model card of the model the app
+    actually loads and says English; there is no description under the
+    title any more (the title is the only text in main above the grid)."""
+    at = _app().run()
+    (caption,) = at.sidebar.caption
+    assert f"https://huggingface.co/{MODEL_ID}" in caption.value
+    assert MODEL_ID in caption.value
+    # The one language cue on screen: the CTC model transcribes nothing
+    # else, and a wrong-language clip fails silently without it.
+    assert "English" in caption.value
+    # By tree shape, not by element type: a description put back as a
+    # caption (the weight the model line now has) would pass a markdown
+    # count, and it would sit outside both columns, so nothing else sees it.
+    title, grid = at.main.children.values()
+    assert title.type == "title"
+    assert len(grid.columns) == 2
 
 
 def test_faux_labels_are_bold() -> None:
@@ -176,20 +277,41 @@ def test_faux_labels_are_bold() -> None:
     CTC has nothing to bias. Toxicity went with the guardian: there is no
     second model to score the transcript."""
     at = _app().run()
-    values = {m.value for m in at.markdown}
-    assert "**VAD segmentation**" in values
-    assert "**Toxicity check**" not in values
-    assert "**Keywords**" not in values
+    assert "**VAD segmentation**" in {m.value for m in at.sidebar.markdown}
+    # The absence guards stay whole-tree: a faux-label creeping back next
+    # to the uploader in main is exactly what they exist to catch.
+    everywhere = {m.value for m in at.markdown}
+    assert "**Toxicity check**" not in everywhere
+    assert "**Keywords**" not in everywhere
 
 
 def test_run_button_gating(audio_bytes: bytes) -> None:
     """Run enables as soon as audio is present — there is no task selection
-    to wait on any more."""
+    to wait on any more — and the input column gains the player with the
+    filename under it, while the transcript slot swaps its empty-state line
+    for a next-step caption (a caption, not an alert: it sits where the card
+    will appear)."""
     at = _app().run()
     at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
     at.run()
-    assert at.button[0].disabled is False
-    assert at.caption[0].value == "sample_10s.wav"
+    assert not at.exception
+    assert at.button(key="transcribe").disabled is False
+    assert len(at.sidebar.button) == 0
+    assert len(at.info) == 0
+    input_col, transcript = at.columns
+    assert [b.label for b in input_col.button] == ["Transcribe"]
+    # The player (st.audio has no typed accessor either; get() by proto type)
+    # and the filename under it, both in the input column.
+    assert len(input_col.get("audio")) == 1
+    assert len(transcript.get("audio")) == 0
+    assert [c.value for c in input_col.caption] == ["sample_10s.wav"]
+    # Before a run the slot is the only container in the transcript column,
+    # and the cap is on it — TestRenderResultCard pins that the card itself
+    # carries no width, so this is the only place the constant is observed.
+    (slot,) = transcript.container
+    assert slot.proto.width_config.pixel_width == TRANSCRIPT_MAX_WIDTH_PX
+    (hint,) = slot.caption
+    assert hint.value.startswith("Press Transcribe")
 
 
 @pytest.mark.parametrize(("duration", "blocked"), [(1801.0, True), (1799.0, False)])
@@ -207,14 +329,22 @@ def test_vad_off_long_audio_gates_run(
         at.toggle(key="use_segmentation").set_value(False)
         at.run()
     assert not at.exception
-    assert at.button[0].disabled is blocked
+    assert at.button(key="transcribe").disabled is blocked
+    input_col, transcript = at.columns
+    assert [c.value for c in input_col.caption] == ["long.wav"]
     if blocked:
-        (vad_warning,) = at.warning
+        # Beside the button it disables, not under the sidebar toggle that
+        # clears it: the sidebar can be collapsed, the button cannot.
+        (vad_warning,) = input_col.warning
         assert "longer than 30 minutes" in vad_warning.value
         assert "more than 4 GB" in vad_warning.value
         assert vad_warning.icon == ":material/warning:"
+        assert len(at.sidebar.warning) == 0
+        # No "press Transcribe" beside a disabled button: the slot is empty.
+        assert len(transcript.caption) == 0
     else:
         assert len(at.warning) == 0
+        assert len(transcript.caption) == 1
 
 
 def test_vad_off_short_clip_shows_no_warning(audio_bytes: bytes) -> None:
@@ -229,7 +359,7 @@ def test_vad_off_short_clip_shows_no_warning(audio_bytes: bytes) -> None:
         at.run()
     assert not at.exception
     assert len(at.warning) == 0
-    assert at.button[0].disabled is False
+    assert at.button(key="transcribe").disabled is False
 
 
 def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:

@@ -121,6 +121,15 @@ MAX_SEGMENT_DURATION_S = 30.0
 # modestly over the cap is left whole rather than halved: with the floor above
 # half the cap, spans up to 2 x floor stay one part and only longer ones split.
 MIN_SEGMENT_DURATION_S = 20.0
+# Reading measure for the transcript. st.text wraps in the body font (16px,
+# roughly 7.5px per character) inside a bordered card padded ~1em a side, so
+# 720px is about 90 characters per line — the same measure as the centered
+# layout this replaced. With the sidebar open on a 1440px laptop the column it
+# sits in is narrower than this and the cap does nothing; past ~1600px of
+# viewport the column outgrows it and an uncapped card would run well past 100
+# characters a line. The extra width goes to the input column instead, where a
+# larger video and a longer audio scrubber are worth having.
+TRANSCRIPT_MAX_WIDTH_PX = 720
 
 
 class PipelineResult(TypedDict):
@@ -680,95 +689,124 @@ def run_pipeline(
 
 
 def _labeled_toggle(label: str, help: str, key: str, value: bool = True) -> bool:
-    label_col, toggle_col = st.columns([15, 1], vertical_alignment="center")
-    with label_col:
+    # A settings row: bold label left, switch right. A horizontal container
+    # with a stretch space between them rather than st.columns([15, 1]): in
+    # the sidebar (300px by default) a 1/16 column is ~15px, narrower than
+    # the switch. The space is load-bearing — markdown's default width
+    # resolves to "content" inside a horizontal container, so without it the
+    # switch sits packed against the label instead of at the far edge.
+    with st.container(horizontal=True, vertical_alignment="center"):
         st.markdown(f"**{label}**", help=help)
-    with toggle_col:
+        st.space("stretch")
         return st.toggle(label, value=value, label_visibility="collapsed", key=key)
 
 
 def _render_result_card(result: PipelineResult, stem: str) -> None:
     transcript = result["transcript"]
     with st.container(border=True):
-        st.subheader("Transcription")
+        # Download in the header row, not under the text: a long transcript
+        # would otherwise put the only action a few hundred lines below the
+        # fold. The stretch space floats it to the card's right edge.
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.subheader("Transcription")
+            st.space("stretch")
+            st.download_button(
+                "",
+                transcript,
+                f"{stem}_transcription.txt",
+                "text/plain",
+                key="dl_txt",
+                icon=":material/download:",
+                help="Download transcription",
+            )
         st.text(transcript)
-        st.download_button(
-            "",
-            transcript,
-            f"{stem}_transcription.txt",
-            "text/plain",
-            key="dl_txt",
-            icon=":material/download:",
-            help="Download transcription",
-        )
 
 
 def main() -> None:
     st.set_page_config(
         page_title="Granite Speech Studio",
         page_icon=":material/graphic_eq:",
-        layout="centered",
+        layout="wide",
     )
 
-    st.title("Granite Speech Studio", text_alignment="center")
-    st.markdown(
-        "Transcribe English audio and video files with the "
-        "[IBM Granite Speech 5.0 TurboCTC model]"
-        "(https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc).",
-        text_alignment="center",
-    )
-
-    upload_tab, record_tab = st.tabs(["Upload", "Record"])
-    with upload_tab:
-        uploaded = st.file_uploader(
-            "Upload audio file",
-            type=SUPPORTED_FORMATS,
-            help=f"Supported formats: {', '.join(SUPPORTED_FORMATS)}",
-            label_visibility="collapsed",
+    # Settings and app info only; every control the run depends on is in main.
+    with st.sidebar:
+        use_segmentation = _labeled_toggle(
+            "VAD segmentation",
+            help=(
+                "Splits audio into speech segments with timestamps using "
+                "Silero VAD. Disable to process the whole audio in one pass."
+            ),
+            key="use_segmentation",
         )
-    with record_tab:
-        recorded = st.audio_input("Record audio", label_visibility="collapsed")
+        # "English only" is the one thing a user needs to know before uploading:
+        # the model transcribes anything into confident lowercase English-shaped
+        # text, so a wrong-language clip fails silently without the cue.
+        st.caption(
+            f"Model: [{MODEL_ID}](https://huggingface.co/{MODEL_ID}) · English only"
+        )
 
-    audio_file = uploaded or recorded
+    st.title("Granite Speech Studio")
 
-    if audio_file:
-        if is_video(audio_file.name):
-            st.video(audio_file)
-        else:
-            st.audio(audio_file)
-        st.caption(audio_file.name if uploaded else "Recorded audio")
-
-    use_segmentation = _labeled_toggle(
-        "VAD segmentation",
-        help=(
-            "Splits audio into speech segments with timestamps using "
-            "Silero VAD. Disable to process the whole audio in one pass."
-        ),
-        key="use_segmentation",
-    )
-
-    vad_off_too_long = False
-    if audio_file is not None and not use_segmentation:
-        # Single-slot cache: getvalue() copies the full byte buffer each rerun,
-        # so memoize the duration and recompute only when the file changes. One
-        # slot can't grow, so no eviction is needed. Keyed on file_id, which
-        # Streamlit mints per upload (or recording) and keeps across reruns;
-        # (name, size) took a same-length replacement for a hit and served
-        # the stale duration.
-        cached = st.session_state.get("_duration")
-        if cached is None or cached[0] != audio_file.file_id:
-            cached = (audio_file.file_id, audio_duration_seconds(audio_file))
-            st.session_state["_duration"] = cached
-        duration = cached[1]
-        if duration is not None and duration > MAX_VAD_OFF_DURATION_S:
-            vad_off_too_long = True
-            st.warning(
-                f"Enable VAD segmentation: audio is longer than "
-                f"{MAX_VAD_OFF_DURATION_S // 60} minutes. A single inference "
-                "that long needs more than 4 GB of memory on top of the "
-                "decoded audio.",
-                icon=":material/warning:",
+    # One grid in every state — input and source on the left, output on the
+    # right — so nothing moves when a file lands or a transcript appears.
+    input_col, transcript_col = st.columns([2, 3], gap="medium")
+    with input_col:
+        upload_tab, record_tab = st.tabs(["Upload", "Record"])
+        with upload_tab:
+            # No help= tooltip: the label is collapsed, so there is nothing for
+            # it to sit beside, and the dropzone lists the accepted extensions
+            # itself.
+            uploaded = st.file_uploader(
+                "Upload audio file",
+                type=SUPPORTED_FORMATS,
+                label_visibility="collapsed",
             )
+        with record_tab:
+            recorded = st.audio_input("Record audio", label_visibility="collapsed")
+        audio_file = uploaded or recorded
+
+        if audio_file:
+            if is_video(audio_file.name):
+                st.video(audio_file)
+            else:
+                st.audio(audio_file)
+            st.caption(audio_file.name if uploaded else "Recorded audio")
+
+        vad_off_too_long = False
+        if audio_file is not None and not use_segmentation:
+            # Single-slot cache: getvalue() copies the full byte buffer each
+            # rerun, so memoize the duration and recompute only when the file
+            # changes. One slot can't grow, so no eviction is needed. Keyed on
+            # file_id, which Streamlit mints per upload (or recording) and
+            # keeps across reruns; (name, size) took a same-length replacement
+            # for a hit and served the stale duration.
+            cached = st.session_state.get("_duration")
+            if cached is None or cached[0] != audio_file.file_id:
+                cached = (audio_file.file_id, audio_duration_seconds(audio_file))
+                st.session_state["_duration"] = cached
+            duration = cached[1]
+            if duration is not None and duration > MAX_VAD_OFF_DURATION_S:
+                vad_off_too_long = True
+                # Next to the button it disables, not the toggle that clears
+                # it: the toggle is in the sidebar, which can be collapsed.
+                st.warning(
+                    f"Enable VAD segmentation: audio is longer than "
+                    f"{MAX_VAD_OFF_DURATION_S // 60} minutes. A single inference "
+                    "that long needs more than 4 GB of memory on top of the "
+                    "decoded audio.",
+                    icon=":material/warning:",
+                )
+
+        can_run = audio_file is not None and not vad_off_too_long
+        run_clicked = st.button(
+            "Transcribe",
+            key="transcribe",
+            type="primary",
+            icon=":material/transcribe:",
+            disabled=not can_run,
+            width="stretch",
+        )
 
     # file_id rather than (name, size): a re-exported file or a second recording
     # of the same length would otherwise keep the previous transcript on screen.
@@ -778,64 +816,72 @@ def main() -> None:
             st.session_state.pop(key, None)
         st.session_state["_last_input_key"] = input_key
 
-    can_run = audio_file is not None and not vad_off_too_long
-
-    with st.container(horizontal_alignment="right"):
-        run_clicked = st.button(
-            "Transcribe",
-            type="primary",
-            disabled=not can_run,
-        )
+    # Everything that answers "where is my transcript?" lands in this one slot:
+    # the next-step hint, the progress bar and spinners during a run, an error,
+    # and finally the card — so the eye never has to move.
+    transcript_slot = transcript_col.container(width=TRANSCRIPT_MAX_WIDTH_PX)
 
     if run_clicked and can_run:
         assert audio_file is not None
-        progress = st.progress(0, text="Starting pipeline...")
-        try:
-            # Audio before the model: every decode-time RuntimeError (unreadable
-            # file, zero samples, under the 70 ms floor) then surfaces at once,
-            # instead of after a ~0.95 GB Hub fetch on a cold cache.
-            wav = load_and_preprocess_audio(audio_file)
-            with st.spinner("Loading speech model..."):
-                model = load_model(MODEL_ID, MODEL_REVISION)
+        with transcript_slot:
+            progress = st.progress(0, text="Starting pipeline...")
+            try:
+                # Audio before the model: every decode-time RuntimeError
+                # (unreadable file, zero samples, under the 70 ms floor) then
+                # surfaces at once, instead of after a ~0.95 GB Hub fetch on a
+                # cold cache.
+                wav = load_and_preprocess_audio(audio_file)
+                with st.spinner("Loading speech model..."):
+                    model = load_model(MODEL_ID, MODEL_REVISION)
 
-            if use_segmentation:
-                with st.spinner("Loading VAD model..."):
-                    vad_model = load_vad_model()
-            else:
-                vad_model = None
+                if use_segmentation:
+                    with st.spinner("Loading VAD model..."):
+                        vad_model = load_vad_model()
+                else:
+                    vad_model = None
 
-            def update_progress(i: int, total: int, label: str) -> None:
-                progress.progress(i / total, text=f"Processing: {label}...")
+                def update_progress(i: int, total: int, label: str) -> None:
+                    progress.progress(i / total, text=f"Processing: {label}...")
 
-            st.session_state.result = run_pipeline(
-                wav,
-                model,
-                vad_model,
-                on_progress=update_progress,
-                use_segmentation=use_segmentation,
-            )
-            if uploaded:
-                stem = Path(audio_file.name).stem
-            else:
-                # Local wall-clock is what a user expects in a filename.
-                stem = datetime.now().strftime(  # noqa: DTZ005
-                    "recording_%Y%m%d_%H%M%S"
+                st.session_state.result = run_pipeline(
+                    wav,
+                    model,
+                    vad_model,
+                    on_progress=update_progress,
+                    use_segmentation=use_segmentation,
                 )
-            st.session_state.result_stem = stem
-        except RuntimeError as e:
-            st.error(str(e))
-            return
-        except Exception as e:  # noqa: BLE001 - top-level UI error boundary
-            st.exception(e)
-            return
-        finally:
-            # Also on the error paths, or a half-filled bar labelled with the
-            # segment that failed stays on screen next to the error message.
-            progress.empty()
+                if uploaded:
+                    stem = Path(audio_file.name).stem
+                else:
+                    # Local wall-clock is what a user expects in a filename.
+                    stem = datetime.now().strftime(  # noqa: DTZ005
+                        "recording_%Y%m%d_%H%M%S"
+                    )
+                st.session_state.result_stem = stem
+            except RuntimeError as e:
+                st.error(str(e))
+                return
+            except Exception as e:  # noqa: BLE001 - top-level UI error boundary
+                st.exception(e)
+                return
+            finally:
+                # Also on the error paths, or a half-filled bar labelled with
+                # the segment that failed stays on screen next to the error.
+                progress.empty()
         st.toast("Pipeline complete!")
 
-    if "result" in st.session_state:
-        _render_result_card(st.session_state.result, st.session_state.result_stem)
+    with transcript_slot:
+        # Captions, not alerts: they sit where the card will appear. Nothing
+        # while Run is blocked — the warning beside the button says why.
+        if "result" in st.session_state:
+            _render_result_card(st.session_state.result, st.session_state.result_stem)
+        elif audio_file is None:
+            st.caption("Upload or record audio to get started.")
+        elif can_run:
+            st.caption(
+                "Press Transcribe. The transcript appears here, one timestamped "
+                "line per segment."
+            )
 
 
 if __name__ == "__main__":

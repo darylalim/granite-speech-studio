@@ -19,8 +19,10 @@ dependencies = [
     # byte-identical to 6.2.1's. Move the pin once a release drops the bound
     # AND stops importing onnxruntime eagerly.
     "silero-vad==6.2.1",
-    # text_alignment= on st.title/st.markdown landed in 1.52.0.
-    "streamlit>=1.52.0",
+    # st.space (the stretch spacer that floats the toggle and the download
+    # button right) landed in 1.51.0; everything else the layout uses —
+    # horizontal containers, container/button width= — is 1.48.0.
+    "streamlit>=1.51.0",
     "torch",
     "torchaudio",
 ]

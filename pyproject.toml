@@ -33,6 +33,7 @@ dev = [
     "streamlit>=1.64.0",
     "ty",
     "ruff",
+    "watchdog>=6.0.0",
 ]
 
 [tool.pytest.ini_options]

@@ -63,6 +63,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # An unspecified `shell:` runs this as `bash -e {0}`, without
+          # pipefail; without it the sed pipeline below would turn a failed
+          # git log into a published release with an empty change list
+          # rather than a failed step.
+          set -o pipefail
+
           version=$(python3 -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
           tag="v$version"
 
@@ -78,11 +84,20 @@ jobs:
 
           # Notes come from commit subjects, not gh --generate-notes: that
           # builds from merged PRs and this repo has none, so it would emit a
-          # bare changelog link.
+          # bare changelog link. The bump commit is the release, not a change
+          # in it, so sed drops the line of any commit whose subject is exactly
+          # `chore: bump version to <version>`. The formatted line, not `git
+          # log --grep`: that tests every line of the message, so a commit
+          # merely quoting the bump subject in its body would vanish too. And
+          # exactly, so a bump that did anything more surfaces in the notes
+          # instead of taking that change with it. Not `grep -v`: on a
+          # bump-only range it exits 1 and -e fails the step, where sed exits
+          # 0 and leaves the section empty.
           {
             echo "## Changes"
             echo
-            git log --no-merges --format='* %s (%h)' "$range"
+            git log --no-merges --format='* %s (%h)' "$range" \
+              | sed '/^\* chore: bump version to [^ ]* ([0-9a-f]*)$/d'
             if [ -n "$prev" ]; then
               echo
               echo "**Full changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$tag"

@@ -1,15 +1,20 @@
 import inspect
+import io
 import re
+import struct
+import wave
 from collections.abc import Iterator
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
 from unittest.mock import MagicMock, patch
 
+import av
 import mlx.core as mx  # ty: ignore[unresolved-import]
 import numpy as np
 import pytest
 import torch
+from av.stream import Disposition
 
 from streamlit_app import (
     _MLX_VAD_BRANCH_ATTRS,
@@ -31,6 +36,7 @@ from streamlit_app import (
     VIDEO_FORMATS,
     PipelineResult,
     _aggregate_segment_safety,
+    _decode_audio,
     _mlx_vad_probabilities,
     _mlx_vad_windows,
     _render_result_card,
@@ -75,6 +81,89 @@ def make_upload(
         upload.name = name
         upload.getvalue.return_value = raw
     return upload
+
+
+def video_only_mp4() -> bytes:
+    """A valid mp4 with one 16x16 video frame and no audio stream, built with
+    PyAV's bundled encoder so the test needs no fixture file and no system
+    FFmpeg."""
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="mp4") as out:
+        stream = out.add_stream("mpeg4", rate=1)
+        stream.width = stream.height = 16
+        stream.pix_fmt = "yuv420p"
+        for packet in stream.encode(av.VideoFrame(16, 16, "yuv420p")):
+            out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+    return buf.getvalue()
+
+
+def latin1_tagged_wav(seconds: float = 1.0, rate: int = 16000) -> bytes:
+    """A silent 16-bit mono WAV with a RIFF INFO comment in Latin-1, the way
+    Windows and DAW tools write ANSI tags. FFmpeg's wav demuxer copies that
+    text into the metadata byte for byte, so with PyAV's default
+    metadata_errors="strict" the open itself raised UnicodeDecodeError before
+    a frame was read. Built tag-free first: sample_10s.wav already carries a
+    LIST/INFO chunk and FFmpeg keeps the *last* value it sees, so splicing a
+    tag ahead of that one would be shadowed and the test would pass without
+    the fix."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.zeros(int(seconds * rate), dtype=np.int16).tobytes())
+    data = bytearray(buf.getvalue())
+    text = "Aufnahme für Prüfung".encode("latin-1") + b"\0"
+    text += b"\0" * (len(text) % 2)  # RIFF chunks are word-aligned
+    info = b"ICMT" + struct.pack("<I", len(text)) + text
+    data += b"LIST" + struct.pack("<I", 4 + len(info)) + b"INFO" + info
+    struct.pack_into("<I", data, 4, len(data) - 8)  # patch the RIFF size
+    return bytes(data)
+
+
+def _mux_pcm(out: Any, stream: Any, seconds: float, layout: str, channels: int) -> None:
+    n = int(seconds * 16000)
+    pcm = np.random.default_rng(0).integers(-2000, 2000, size=(1, n * channels))
+    frame = av.AudioFrame.from_ndarray(
+        pcm.astype(np.int16), format="s16", layout=layout
+    )
+    frame.sample_rate = 16000
+    frame.pts = 0
+    for packet in stream.encode(frame):
+        out.mux(packet)
+    for packet in stream.encode(None):
+        out.mux(packet)
+
+
+def two_track_mkv() -> bytes:
+    """A Matroska file whose first audio track is 1 s mono and whose second,
+    flagged `default`, is 2 s stereo — the shape of a video with a commentary
+    track first. av_find_best_stream (and torchcodec before it) picks the
+    default track; streams.audio[0] picked the mono one."""
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="matroska") as out:
+        first = out.add_stream("pcm_s16le", rate=16000, layout="mono")
+        default = out.add_stream("pcm_s16le", rate=16000, layout="stereo")
+        default.disposition = Disposition.default
+        _mux_pcm(out, first, 1.0, "mono", 1)
+        _mux_pcm(out, default, 2.0, "stereo", 2)
+    return buf.getvalue()
+
+
+def undecodable_mkv() -> bytes:
+    """A valid Matroska file whose audio track claims a codec the bundled
+    FFmpeg cannot decode (Dolby AC-4): an mp3 track with its codec ID
+    rewritten. PyAV opens it with codec_context None, and touching the
+    stream's layout or rate then raised a bare AttributeError."""
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="matroska") as out:
+        stream = out.add_stream("libmp3lame", rate=16000, layout="mono")
+        _mux_pcm(out, stream, 1.0, "mono", 1)
+    data = buf.getvalue()
+    assert data.count(b"A_MPEG/L3") == 1
+    return data.replace(b"A_MPEG/L3", b"A_AC4\0\0\0\0")
 
 
 def classification_calls(tokenizer: MagicMock) -> list:
@@ -156,7 +245,7 @@ def test_max_vad_off_duration_is_thirty_minutes() -> None:
     # block-local so there is no context to run out of, and peak MLX memory
     # grows linearly at ~2 MB per second of audio — measured 4.5 GB at 30
     # minutes and 7.8 GB at an hour. MLX is not the whole process, though:
-    # torchaudio's decode at the source rate, the guardian and the torch
+    # the PyAV decode at the source rate, the guardian and the torch
     # baseline sit alongside it, which is what rules the hour out on 16 GB.
     assert MAX_VAD_OFF_DURATION_S == 1800
 
@@ -686,7 +775,7 @@ class TestLoadAndPreprocessAudio:
         # an st.exception traceback rather than the one-line st.error.
         with (
             patch(
-                "streamlit_app.torchaudio.load", return_value=(torch.zeros(1, 0), 16000)
+                "streamlit_app._decode_audio", return_value=(torch.zeros(1, 0), 16000)
             ),
             pytest.raises(RuntimeError, match="No audio detected"),
         ):
@@ -709,7 +798,7 @@ class TestLoadAndPreprocessAudio:
         # [conv] ValueError inside the encoder, 1120 decodes.
         with (
             patch(
-                "streamlit_app.torchaudio.load",
+                "streamlit_app._decode_audio",
                 return_value=(torch.zeros(1, samples), sr),
             ),
             pytest.raises(RuntimeError, match="Audio is too short"),
@@ -718,7 +807,7 @@ class TestLoadAndPreprocessAudio:
 
     def test_audio_at_the_floor_loads(self) -> None:
         with patch(
-            "streamlit_app.torchaudio.load",
+            "streamlit_app._decode_audio",
             return_value=(torch.zeros(1, MIN_AUDIO_SAMPLES), SAMPLE_RATE),
         ):
             wav = load_and_preprocess_audio(make_upload(AUDIO_DIR / "sample_10s.wav"))
@@ -727,6 +816,51 @@ class TestLoadAndPreprocessAudio:
     def test_invalid_audio_raises_runtime_error(self) -> None:
         with pytest.raises(RuntimeError, match="Failed to load audio file"):
             load_and_preprocess_audio(make_upload(raw=b"not audio data"))
+
+    def test_container_without_audio_raises_runtime_error(self) -> None:
+        # A valid container is not enough: the video-only mp4 opens fine and
+        # has nothing to decode, which must read as a load failure rather than
+        # slip through as zero samples.
+        with pytest.raises(RuntimeError, match="no audio stream"):
+            load_and_preprocess_audio(make_upload(raw=video_only_mp4(), name="v.mp4"))
+
+    def test_wav_decodes_bit_exactly(self) -> None:
+        # PyAV converts every codec's output to planar float32 in [-1, 1]. For
+        # 16-bit PCM that must be the file's own samples / 32768 — the same
+        # scaling torchaudio applied, so the switch of decoder moved nothing.
+        with wave.open(str(AUDIO_DIR / "sample_10s.wav")) as w:
+            raw = w.readframes(w.getnframes())
+        expected = torch.frombuffer(bytearray(raw), dtype=torch.int16).float() / 32768
+        wav = load_and_preprocess_audio(make_upload(AUDIO_DIR / "sample_10s.wav"))
+        assert wav.shape == (1, len(expected))
+        assert torch.equal(wav[0], expected)
+
+    def test_latin1_tags_do_not_block_decoding(self) -> None:
+        # The audio payload is untouched by the tag encoding, so the file must
+        # load; the app never reads a tag, so lossy decoding of it is free.
+        wav = load_and_preprocess_audio(
+            make_upload(raw=latin1_tagged_wav(), name="t.wav")
+        )
+        assert wav.shape == (1, 16000)
+
+    def test_picks_the_default_track_not_the_first(self) -> None:
+        wav, rate = _decode_audio(two_track_mkv())
+        assert (wav.shape, rate) == ((2, 32000), 16000)
+
+    def test_codec_without_decoder_raises_readable_error(self) -> None:
+        with pytest.raises(RuntimeError, match="no decoder is available"):
+            load_and_preprocess_audio(make_upload(raw=undecodable_mkv(), name="u.mkv"))
+
+    def test_stereo_is_downmixed_after_decode(self) -> None:
+        # Two channels in, one out, and the decode still reports the native
+        # rate so the resample happens on the mono signal.
+        with patch(
+            "streamlit_app._decode_audio",
+            return_value=(torch.stack([torch.ones(32000), -torch.ones(32000)]), 16000),
+        ):
+            wav = load_and_preprocess_audio(make_upload(AUDIO_DIR / "sample_10s.wav"))
+        assert wav.shape == (1, 32000)
+        assert torch.equal(wav, torch.zeros(1, 32000))
 
 
 class TestAudioDurationSeconds:
@@ -738,6 +872,40 @@ class TestAudioDurationSeconds:
 
     def test_invalid_audio_returns_none(self) -> None:
         assert audio_duration_seconds(make_upload(raw=b"not audio data")) is None
+
+    def test_container_without_audio_returns_none(self) -> None:
+        assert audio_duration_seconds(make_upload(raw=video_only_mp4())) is None
+
+    def test_latin1_tags_do_not_hide_the_duration(self) -> None:
+        # UnicodeDecodeError is a ValueError, so without metadata_errors=
+        # "replace" this returned None — and the long-audio gate went dark.
+        duration = audio_duration_seconds(make_upload(raw=latin1_tagged_wav()))
+        assert duration == pytest.approx(1.0)
+
+    def test_reads_the_default_track(self) -> None:
+        assert audio_duration_seconds(
+            make_upload(raw=two_track_mkv())
+        ) == pytest.approx(2.0)
+
+    def test_falls_back_to_container_duration(self) -> None:
+        # Some formats carry a duration on the container but not the stream;
+        # that one is in av.time_base microseconds, not the stream's time base.
+        # spec'd so it passes the isinstance narrowing in _best_audio_stream;
+        # a bare MagicMock is not an AudioStream and would read as "no audio".
+        stream = MagicMock(spec=av.AudioStream, duration=None, time_base=None)
+        container = MagicMock(duration=2_500_000)
+        container.streams.best.return_value = stream
+        with patch("streamlit_app.av.open") as opener:
+            opener.return_value.__enter__.return_value = container
+            assert audio_duration_seconds(make_upload(raw=b"x")) == pytest.approx(2.5)
+
+    def test_unknown_duration_returns_none(self) -> None:
+        stream = MagicMock(spec=av.AudioStream, duration=None, time_base=None)
+        container = MagicMock(duration=None)
+        container.streams.best.return_value = stream
+        with patch("streamlit_app.av.open") as opener:
+            opener.return_value.__enter__.return_value = container
+            assert audio_duration_seconds(make_upload(raw=b"x")) is None
 
 
 # ---------------------------------------------------------------------------

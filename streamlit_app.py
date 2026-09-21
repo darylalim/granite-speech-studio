@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+import av
+
 # mlx 0.32.0 dropped mlx/core/*.pyi while still shipping py.typed, so ty resolves
 # the package but not the compiled `core` extension. Drop the suppression once
 # upstream ships stubs again.
@@ -32,7 +34,6 @@ from mlx_audio.stt.utils import load_model as _load_stt_model
 from mlx_audio.vad.utils import load_model as _load_mlx_vad_model
 from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-from torchcodec.decoders import AudioDecoder
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 warnings.filterwarnings(
@@ -103,7 +104,7 @@ VAD_ENCODER_BATCH_CHUNKS = 2048
 # 0.88 GB resident): 10s -> 1.1 GB, 60s -> 1.7 GB, 300s -> 2.0 GB,
 # 1200s -> 3.4 GB, 1800s -> 4.5 GB, 3600s -> 7.8 GB — linear at ~2 MB per
 # second of audio. That series is MLX alone: the Streamlit process also
-# holds torchaudio's decode at the *source* rate and channel count (a 48 kHz
+# holds the PyAV decode at the *source* rate and channel count (a 48 kHz
 # stereo hour is ~1.4 GB float32 before the mono and 16 kHz copies), the
 # upload bytes, the guardian and the torch/transformers baseline, so an hour
 # would land past 10 GB in-process. 30 minutes keeps the whole process
@@ -464,9 +465,107 @@ def load_model(model_id: str, revision: str | None = None) -> Any:
     return _load_stt_model(model_id, revision=revision, strict=True)
 
 
+def _open_container(data: bytes) -> av.container.InputContainer:
+    """Open an upload for reading, with tag text decoded lossily.
+
+    `av.open` turns container *and* stream metadata into `str` at open time,
+    before a frame is read, and its default is `errors="strict"`. FFmpeg's wav
+    demuxer copies RIFF INFO and BWF `bext` text into those tags byte for
+    byte (only ID3 is transcoded), and Windows/DAW tools write them in ANSI,
+    so a perfectly decodable file raised UnicodeDecodeError on its artist
+    field alone — and, because UnicodeDecodeError is a ValueError,
+    `audio_duration_seconds` swallowed it into a silent None. Nothing here
+    reads a tag, so "replace" costs nothing. One helper rather than a kwarg
+    at each call site so the two opens cannot drift apart on it.
+    """
+    return av.open(io.BytesIO(data), mode="r", metadata_errors="replace")
+
+
+def _best_audio_stream(
+    container: av.container.InputContainer,
+) -> av.AudioStream | None:
+    """The track `av_find_best_stream` picks — the one flagged `default`,
+    then the higher-bitrate / more-frames one — or None when the container
+    has no audio.
+
+    The same FFmpeg call the torchcodec path made, so a multi-track mp4/mkv
+    keeps transcribing the track it always did. `streams.audio[0]` is the
+    lowest-indexed track instead, which on a file whose commentary or
+    low-bitrate track comes first is silently the wrong one, with the
+    duration gate reading that track's length too. `best()` is typed
+    `Stream | None`; the isinstance is what narrows it.
+    """
+    stream = container.streams.best("audio")
+    return stream if isinstance(stream, av.AudioStream) else None
+
+
+def _decode_audio(data: bytes) -> tuple[torch.Tensor, int]:
+    """Decode a container's best audio stream to (channels, samples) float32
+    at its native rate, via PyAV.
+
+    PyAV is the decoder because its wheels *bundle* FFmpeg. torchaudio's own
+    path goes through torchcodec, which dlopen()s whatever FFmpeg Homebrew
+    has installed, and that broke twice in one week: Homebrew moved `ffmpeg`
+    to 9.0 while torchcodec 0.15 only ships loaders for 4–8, and torchcodec
+    0.16 added the 9 loader but dropped the /opt/homebrew rpath from its
+    dylibs, so on Apple Silicon it finds nothing at all. Neither is fixable
+    from inside the process (dyld reads its search paths at launch), so the
+    app now depends on no system FFmpeg. torchaudio stays for its pure-torch
+    resampler, which never touches torchcodec.
+
+    Frames are converted to planar float32 at their own layout and
+    rate before concatenation: a pure sample-format conversion, so swresample
+    buffers nothing and every codec's output — packed or planar, s16 or
+    fltp — lands in the same (channels, samples) matrix scaled to [-1, 1].
+    """
+    with _open_container(data) as container:
+        stream = _best_audio_stream(container)
+        if stream is None:
+            raise ValueError("the file has no audio stream")
+        # PyAV leaves codec_context None when the bundled FFmpeg has no
+        # decoder for the track's codec (Dolby AC-4 in an mkv, say), and
+        # AudioStream.__getattr__ then raises AttributeError for `layout` and
+        # `rate` — "'AudioStream' object has no attribute 'layout'" is what
+        # the user would see. Name the real cause before touching either.
+        # `name` is proxied through that same __getattr__ on this build (the
+        # shipped .py has a `Stream.name` property; the compiled extension
+        # does not), hence the getattr rather than the attribute.
+        if stream.codec_context is None:
+            codec = getattr(stream, "name", None) or "unknown"
+            raise ValueError(f"no decoder is available for the audio codec ({codec})")
+        # The converter is built from the first decoded frame, not the stream
+        # header. The two normally agree, but HE-AAC with implicit SBR is
+        # the known exception: the header declares half the rate the frames
+        # carry, and a converter targeting the header's rate would have
+        # swresample downsample every frame to it — lossy, and reporting the
+        # wrong rate to the resample that follows. The header only serves
+        # the zero-frame case, where there is no frame to ask.
+        rate, channels = stream.rate, len(stream.layout.channels)
+        to_planar_float: av.AudioResampler | None = None
+        frames: list[torch.Tensor] = []
+        for frame in container.decode(stream):
+            if to_planar_float is None:
+                rate, channels = frame.sample_rate, len(frame.layout.channels)
+                to_planar_float = av.AudioResampler(
+                    format="fltp", layout=frame.layout, rate=rate
+                )
+            frames.extend(
+                torch.from_numpy(converted.to_ndarray())
+                for converted in to_planar_float.resample(frame)
+            )
+        if to_planar_float is not None:
+            frames.extend(
+                torch.from_numpy(converted.to_ndarray())
+                for converted in to_planar_float.resample(None)
+            )
+    if not frames:
+        return torch.zeros(channels, 0), rate
+    return torch.cat(frames, dim=1), rate
+
+
 def load_and_preprocess_audio(audio_file: UploadedFile) -> torch.Tensor:
     try:
-        wav, sr = torchaudio.load(io.BytesIO(audio_file.getvalue()))
+        wav, sr = _decode_audio(audio_file.getvalue())
     except Exception as e:
         raise RuntimeError(f"Failed to load audio file: {e}") from e
 
@@ -496,14 +595,29 @@ def load_and_preprocess_audio(audio_file: UploadedFile) -> torch.Tensor:
 
 
 def audio_duration_seconds(audio_file: UploadedFile) -> float | None:
+    """Clip length from the container headers alone — no frame is decoded.
+
+    The stream's own duration (in its time base) is the accurate figure; the
+    container-level one (in av.time_base microseconds) is the fallback for
+    formats that carry only that. Neither is guaranteed, so None is a valid
+    answer and the caller treats it as "unknown", not "zero".
+    """
     try:
-        decoder = AudioDecoder(audio_file.getvalue())
-        duration = decoder.metadata.duration_seconds
-    except (RuntimeError, ValueError, OSError):
+        with _open_container(audio_file.getvalue()) as container:
+            stream = _best_audio_stream(container)
+            if stream is None:
+                return None
+            if stream.duration is not None and stream.time_base is not None:
+                duration = float(stream.duration * stream.time_base)
+            elif container.duration is not None:
+                duration = container.duration / av.time_base
+            else:
+                return None
+    except (av.FFmpegError, ValueError, OSError):
         return None
-    if duration is None or duration <= 0:
+    if duration <= 0:
         return None
-    return float(duration)
+    return duration
 
 
 @st.cache_resource(show_spinner=False)

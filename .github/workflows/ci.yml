@@ -36,10 +36,11 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run ty check
 
-      # torchcodec dlopen()s FFmpeg's shared libs at import and macos-latest no
-      # longer ships them. After ty so the fast checks fail before the install.
-      - run: brew install ffmpeg
-
+      # No `brew install ffmpeg` any more, on purpose: audio is decoded by
+      # PyAV, whose wheel bundles FFmpeg. The Homebrew step is what broke
+      # this job when the formula moved to FFmpeg 9 ahead of torchcodec, and
+      # a runner with no FFmpeg is now the more useful configuration — it is
+      # the one that proves the app needs none.
       - run: uv run pytest -q
 
   # Tags and publishes v<version> when pyproject.toml names a version that has

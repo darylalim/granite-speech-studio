@@ -7,12 +7,12 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Daryl Lim" }]
 dependencies = [
+    "av>=18.1.0",
     "mlx-audio>=0.5.1",
     "silero-vad",
     "streamlit",
     "torch",
     "torchaudio",
-    "torchcodec>=0.10.0",
     "transformers",
 ]
 

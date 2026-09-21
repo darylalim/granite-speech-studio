@@ -3,7 +3,7 @@
 These complement test_streamlit_app.py (which mocks `st` entirely and never
 exercises the UI wiring). AppTest re-executes streamlit_app.py in a fresh
 namespace on every .run(), so mocks must patch the SHARED upstream imports
-(mlx_audio, transformers, torchcodec) rather than streamlit_app.* — patching
+(mlx_audio, transformers, av) rather than streamlit_app.* — patching
 streamlit_app attributes does not cross AppTest's script-runner boundary, and
 clicking Run without an upstream patch would fetch the real ~0.9 GB speech
 model, the guardian and the MLX VAD checkpoint from the Hub.
@@ -15,15 +15,17 @@ wheel — real VAD spans on the fixture, nothing downloaded.
 """
 
 import tomllib
+import wave
 from collections.abc import Iterator
 from contextlib import contextmanager
+from fractions import Fraction
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import av
 import pytest
 import streamlit as st
 import torch
-import torchaudio
 from streamlit import config
 from streamlit.testing.v1 import AppTest
 
@@ -91,6 +93,35 @@ def _stub_guardian(toxic: bool) -> Iterator[MagicMock]:
         tokenizer_cls.from_pretrained.return_value = tokenizer
         model_cls.from_pretrained.return_value = model
         yield model_cls
+
+
+@contextmanager
+def _header_duration(seconds: float) -> Iterator[MagicMock]:
+    """Patch the shared `av.open` so audio_duration_seconds reads `seconds`
+    from the (fake) stream header — no fixture is half an hour long. The
+    stream's duration is in its own time base, which is how real containers
+    carry it, so the app's `duration * time_base` arithmetic is exercised
+    rather than bypassed."""
+    stream = MagicMock(
+        spec=av.AudioStream,
+        duration=round(seconds * 16000),
+        time_base=Fraction(1, 16000),
+    )
+    container = MagicMock()
+    # The app asks for streams.best("audio"), not streams.audio[0], and narrows
+    # the result with isinstance — hence the spec.
+    container.streams.best.return_value = stream
+    with patch("av.open") as opener:
+        opener.return_value.__enter__.return_value = container
+        yield opener
+
+
+def _fixture_samples() -> int:
+    """The wav fixture's frame count straight from its header, so the Run
+    tests can bound the VAD segment against the clip without going through
+    the decoder under test."""
+    with wave.open(str(AUDIO_DIR / "sample_10s.wav")) as w:
+        return w.getnframes()
 
 
 @contextmanager
@@ -193,8 +224,7 @@ def test_vad_off_long_audio_gates_run(
     purpose: the message's "4 GB" is what a single inference measured at
     exactly that length (4.5 GB of MLX memory, before the decoded audio the
     process also holds), so retuning the constant has to retune the text."""
-    with patch("torchcodec.decoders.AudioDecoder") as decoder:
-        decoder.return_value.metadata.duration_seconds = duration
+    with _header_duration(duration):
         at = _app().run()
         at.file_uploader[0].set_value(("long.wav", audio_bytes, "audio/wav"))
         at.toggle(key="use_segmentation").set_value(False)
@@ -215,8 +245,7 @@ def test_vad_off_short_clip_shows_no_warning(audio_bytes: bytes) -> None:
     fired a translation-passthrough warning here (anything past 20 s); an
     English-only CTC model has nothing to pass through, so the hour-long
     memory gate is the only VAD-off warning left."""
-    with patch("torchcodec.decoders.AudioDecoder") as decoder:
-        decoder.return_value.metadata.duration_seconds = 30.0
+    with _header_duration(30.0):
         at = _app().run()
         at.file_uploader[0].set_value(("clip.wav", audio_bytes, "audio/wav"))
         at.toggle(key="use_segmentation").set_value(False)
@@ -285,7 +314,7 @@ def test_run_with_toxicity_check_renders_banner(
     assert generate.call_count == 1
     assert generate.call_args.kwargs.keys() == {"audio"}
     segment = generate.call_args.kwargs["audio"]
-    full_clip = torchaudio.load(str(AUDIO_DIR / "sample_10s.wav"))[0].shape[-1]
+    full_clip = _fixture_samples()
     assert 0 < segment.shape[0] < full_clip
 
     assert len(at.success) + len(at.warning) == 1
@@ -335,7 +364,7 @@ def test_run_with_vad_off_transcribes_the_whole_clip(
     assert at.text[0].value.splitlines() == ["[0:00 - 0:09] hello world"]
     generate = speech_loader.return_value.generate
     assert generate.call_count == 1
-    full_clip = torchaudio.load(str(AUDIO_DIR / "sample_10s.wav"))[0].shape[-1]
+    full_clip = _fixture_samples()
     assert generate.call_args.kwargs["audio"].shape == (full_clip,)
 
 

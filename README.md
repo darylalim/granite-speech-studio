@@ -38,12 +38,12 @@ Audio is loaded and resampled to 16 kHz mono, optionally segmented with VAD, the
 - Apple Silicon Mac (M1/M2/M3/M4)
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) — Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- [FFmpeg](https://ffmpeg.org/) — `brew install ffmpeg` (required: `torchcodec` loads FFmpeg's shared libraries at import time, so the app won't start without it)
+
+No system FFmpeg is needed: audio and video are decoded by [PyAV](https://pyav.org/), which bundles FFmpeg in its wheel.
 
 ## Setup
 
 ```bash
-brew install ffmpeg   # required at runtime by torchcodec
 uv sync
 uv run streamlit run streamlit_app.py
 ```
@@ -89,6 +89,7 @@ uv run pytest           # run tests
 - [IBM Granite](https://huggingface.co/ibm-granite) — Speech and Guardian models
 - [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection ([MLX port](https://huggingface.co/mlx-community/silero-vad-v6))
 - [Apple MLX](https://github.com/ml-explore/mlx) and [mlx-audio](https://github.com/Blaizzy/mlx-audio) — on-device inference
+- [PyAV](https://pyav.org/) and [FFmpeg](https://ffmpeg.org/) — audio and video decoding
 - [Streamlit](https://streamlit.io/) — web UI
 
 ## License

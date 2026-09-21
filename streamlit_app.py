@@ -35,9 +35,6 @@ from mlx_audio.vad.utils import load_model as _load_mlx_vad_model
 from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
-warnings.filterwarnings(
-    "ignore", message="An output with one or more elements was resized"
-)
 # Encoder-only, English-only, greedy CTC: no prompt, no decoder, no
 # translation. mlx_audio loads IBM's own bf16 checkpoint directly (no community
 # conversion in between), which is why load_model can insist on strict=True.
@@ -677,11 +674,9 @@ def run_pipeline(
         ts_end = format_timestamp(seg["end"])
         lines.append(f"[{ts_start} - {ts_end}] {text}")
 
-    if on_progress:
-        # on_progress fires before each unit of work, so the last segment left
-        # the bar at (total-1)/total, still labelled with the segment that has
-        # already finished. Carry it to full before the caller renders results.
-        on_progress(total_steps, total_steps, "results")
+    # No closing (total, total) call: nothing runs after the last segment, and
+    # main() empties the bar the moment this returns, so it would be coalesced
+    # with that empty() in the same flush and, in practice, never painted.
     return {"transcript": "\n".join(lines)}
 
 

@@ -1098,21 +1098,17 @@ class TestRunPipeline:
         [
             pytest.param(
                 SEGMENT_9S,
-                [(0, 1, "segment 1 of 1"), (1, 1, "results")],
+                [(0, 1, "segment 1 of 1")],
                 id="one_segment",
             ),
             pytest.param(
                 SEGMENTS_3S,
-                [
-                    (0, 2, "segment 1 of 2"),
-                    (1, 2, "segment 2 of 2"),
-                    (2, 2, "results"),
-                ],
+                [(0, 2, "segment 1 of 2"), (1, 2, "segment 2 of 2")],
                 id="two_segments",
             ),
         ],
     )
-    def test_progress_sequence_ends_with_results(
+    def test_progress_fires_once_before_each_segment(
         self,
         pipeline_mocks: PipelineMocks,
         segments: list[dict[str, float]],
@@ -1126,10 +1122,11 @@ class TestRunPipeline:
                 *pipeline_mocks,
                 on_progress=lambda i, total, label: calls.append((i, total, label)),
             )
-        # Fires before each unit of work, so the label names what is in flight;
-        # the closing (total, total, "results") call is what carries the bar to
-        # full before the caller renders, rather than leaving it frozen at
-        # (total-1)/total under the segment that already finished.
+        # Fires before each unit of work, so the label names what is in flight,
+        # and there is no closing (total, total) call: nothing runs after the
+        # last segment, and main() empties the bar as soon as the pipeline
+        # returns, so one would be coalesced with that empty() and, in
+        # practice, never painted.
         assert calls == expected
 
 

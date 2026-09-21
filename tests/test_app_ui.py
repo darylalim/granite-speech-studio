@@ -367,12 +367,17 @@ def test_config_defines_no_custom_theme(app_config: dict) -> None:
     the defaults back in is not the same thing.
 
     The second half is the guard that outlives this config: should a custom
-    theme ever be reintroduced, it has to define both sub-palettes or the
-    appearance menu disappears entirely and the app locks to one mode
-    (verified against 1.61.1 — a [theme] table carrying only primaryColor
-    renders the menu with no appearance section at all)."""
+    theme ever be reintroduced, it has to define both sub-palettes. The
+    frontend only needs one of them — a [theme] table with nothing under
+    [theme.light] or [theme.dark] is what drops the appearance section and
+    locks the app to one mode (verified against 1.61.1 and 1.64.0 with a
+    table carrying only primaryColor), and either sub-table keeps the menu
+    with the other mode derived from [theme] — but a mode that is only
+    derived is a mode nobody reviewed, so both are demanded here."""
     if "theme" in app_config:
-        assert {"light", "dark"} <= app_config["theme"].keys()
+        # By value, not by header: an empty [theme.light] sets nothing, and the
+        # frontend keeps the menu only when a sub-palette carries a value.
+        assert app_config["theme"].get("light") and app_config["theme"].get("dark")
 
 
 def _option_paths(table: dict, valid: set[str]) -> Iterator[str]:

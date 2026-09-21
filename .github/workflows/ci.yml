@@ -105,6 +105,11 @@ jobs:
           } >"$RUNNER_TEMP/notes.md"
 
           # --target pins the tag to the commit check ran on, not whatever main
-          # points at by now. Title defaults to the tag, matching v0.11.0.
-          gh release create "$tag" --target "$GITHUB_SHA" --notes-file "$RUNNER_TEMP/notes.md"
+          # points at by now. --title because the title does not default to
+          # the tag: an untitled release is stored with an empty name, and the
+          # repo sidebar and releases list render that as `<tag>: <subject of
+          # the tagged commit>` — which is the bump commit, so after the notes
+          # filter this would be the one place its subject still showed.
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            --notes-file "$RUNNER_TEMP/notes.md"
           echo "Published $tag."

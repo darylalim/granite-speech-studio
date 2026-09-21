@@ -10,7 +10,7 @@ from typing import Any, NamedTuple
 from unittest.mock import MagicMock, patch
 
 import av
-import mlx.core as mx  # ty: ignore[unresolved-import]
+import mlx.core as mx
 import numpy as np
 import pytest
 import torch
@@ -485,7 +485,7 @@ class TestMlxVadInternals:
         reference = model._predict_proba_array(audio, 16000).reshape(-1)
         mx.eval(mine, reference)
         assert mine.shape == reference.shape
-        assert float(mx.max(mx.abs(mine - reference)).item()) < 1e-5
+        assert float(mx.max(mx.abs(mine - reference))) < 1e-5
 
     def test_lstm_state_carries_across_encoder_batches(self) -> None:
         # With a batch size below the chunk count the (hidden, cell) handoff is
@@ -500,7 +500,7 @@ class TestMlxVadInternals:
             batched = _mlx_vad_probabilities(model, audio)
         mx.eval(batched, reference)
         assert batched.shape == reference.shape
-        assert float(mx.max(mx.abs(batched - reference)).item()) < 1e-5
+        assert float(mx.max(mx.abs(batched - reference))) < 1e-5
 
     def test_real_mlx_audio_vad_model_still_exposes_the_internals(self) -> None:
         # Guards the actual installed mlx_audio, which make_mlx_vad_model cannot.
@@ -540,9 +540,11 @@ class TestMlxVadInternals:
 
         The tests above run random weights, so they prove the batching is
         arithmetically equivalent but say nothing about the two *checkpoints*
-        agreeing. Pinning MLX_VAD_REVISION froze one side of that pair, not
-        both: `silero-vad` is an ordinary dependency, so a `uv lock` bumping it
-        to a future Silero release would leave the backends disagreeing with
+        agreeing. Pinning MLX_VAD_REVISION froze one side of that pair and
+        `silero-vad==6.2.1` freezes the other, so while both pins stand this is
+        a tripwire for the pins themselves; it becomes load-bearing again the
+        moment the silero-vad pin is lifted, when a `uv lock` could bump it to
+        a future Silero release and leave the backends disagreeing with
         nothing else to notice.
 
         Skipped rather than failed when the repo cannot be fetched — an offline

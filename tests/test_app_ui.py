@@ -157,7 +157,7 @@ def test_default_state() -> None:
     # Run is disabled until audio is loaded.
     assert at.button[0].disabled is True
     assert len(at.subheader) == 0
-    assert "result" not in at.session_state.filtered_state
+    assert "result" not in at.session_state
 
 
 def test_description_names_the_loaded_model() -> None:
@@ -264,7 +264,8 @@ def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:
         assert opener.call_count == 2
         assert at.session_state["_duration"][0] != first_id
         assert at.session_state["_duration"][0] == at.file_uploader[0].value.file_id
-    duration_slots = [k for k in at.session_state.filtered_state if k == "_duration"]
+    # One slot, not one per upload: a `_duration_<file_id>` key would show here.
+    duration_slots = [k for k in at.session_state if k.startswith("_duration")]
     assert duration_slots == ["_duration"]
 
 
@@ -335,8 +336,8 @@ def test_changing_a_toggle_discards_the_result(
         at.run()
     assert not at.exception
     assert len(at.subheader) == 0
-    assert "result" not in at.session_state.filtered_state
-    assert "result_stem" not in at.session_state.filtered_state
+    assert "result" not in at.session_state
+    assert "result_stem" not in at.session_state
 
 
 def test_reuploading_an_identical_file_discards_the_result(
@@ -356,8 +357,8 @@ def test_reuploading_an_identical_file_discards_the_result(
         at.run()
     assert not at.exception
     assert len(at.subheader) == 0
-    assert "result" not in at.session_state.filtered_state
-    assert "result_stem" not in at.session_state.filtered_state
+    assert "result" not in at.session_state
+    assert "result_stem" not in at.session_state
 
 
 def test_config_defines_no_custom_theme(app_config: dict) -> None:

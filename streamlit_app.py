@@ -21,11 +21,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import av
-
-# mlx 0.32.0 dropped mlx/core/*.pyi while still shipping py.typed, so ty resolves
-# the package but not the compiled `core` extension. Drop the suppression once
-# upstream ships stubs again.
-import mlx.core as mx  # ty: ignore[unresolved-import]
+import mlx.core as mx
 import streamlit as st
 import torch
 import torchaudio

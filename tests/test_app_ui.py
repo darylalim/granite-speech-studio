@@ -234,19 +234,36 @@ def test_vad_off_short_clip_shows_no_warning(audio_bytes: bytes) -> None:
 
 def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:
     """With VAD off, the duration cache is a single `_duration` slot holding the
-    current file's ((name, size), duration) — swapping files overwrites it rather
-    than accumulating an entry per file, so it can't grow unbounded."""
-    size = len(audio_bytes)
-    at = _app().run()
-    at.toggle(key="use_segmentation").set_value(False)
-    at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
-    at.run()
-    assert at.session_state["_duration"][0] == ("a.wav", size)
+    current upload's (file_id, duration) — a new upload overwrites it rather
+    than accumulating an entry per file, so it can't grow unbounded. The key is
+    file_id, not (name, size): Streamlit mints one per upload and keeps it
+    across reruns, so a bare rerun is a hit and an identical re-upload a miss.
+    Hits and misses are told apart by counting `av.open` calls — the slot's key
+    alone cannot, since a recompute under the same file_id stores the same key.
+    Nothing but audio_duration_seconds opens a container before Run."""
+    real_open = av.open
+    with patch("av.open", wraps=real_open) as opener:
+        at = _app().run()
+        at.toggle(key="use_segmentation").set_value(False)
+        at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
+        at.run()
+        first_id, first_duration = at.session_state["_duration"]
+        assert first_id == at.file_uploader[0].value.file_id
+        assert first_duration == pytest.approx(10.0, abs=0.05)
+        assert opener.call_count == 1
 
-    at.file_uploader[0].set_value(("b.wav", audio_bytes, "audio/wav"))
-    at.run()
-    # Slot is overwritten in place, not accumulated.
-    assert at.session_state["_duration"][0] == ("b.wav", size)
+        at.run()
+        # A rerun without a new upload is a hit: same key, no second read.
+        assert at.session_state["_duration"][0] == first_id
+        assert opener.call_count == 1
+
+        at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
+        at.run()
+        # Same name, same bytes, new upload: a miss, read again, and the slot
+        # now holds the new upload's id — overwritten in place, not accumulated.
+        assert opener.call_count == 2
+        assert at.session_state["_duration"][0] != first_id
+        assert at.session_state["_duration"][0] == at.file_uploader[0].value.file_id
     duration_slots = [k for k in at.session_state.filtered_state if k == "_duration"]
     assert duration_slots == ["_duration"]
 
@@ -315,6 +332,27 @@ def test_changing_a_toggle_discards_the_result(
             MODEL_ID, revision=MODEL_REVISION, strict=True
         )
         at.toggle(key="use_segmentation").set_value(True)
+        at.run()
+    assert not at.exception
+    assert len(at.subheader) == 0
+    assert "result" not in at.session_state.filtered_state
+    assert "result_stem" not in at.session_state.filtered_state
+
+
+def test_reuploading_an_identical_file_discards_the_result(
+    audio_bytes: bytes, speech_loader: MagicMock
+) -> None:
+    """The input key is the upload's file_id, so a replacement with the same
+    name and byte count — a re-exported file, or a second recording of the
+    same length — is a new input and drops the stale card. Keyed on (name,
+    size) it was a hit, and the previous transcript stayed on screen."""
+    with _offline_mlx_vad():
+        at = _upload_and_run(audio_bytes, use_segmentation=False)
+        _assert_single_result_card(at)
+        speech_loader.assert_called_once_with(
+            MODEL_ID, revision=MODEL_REVISION, strict=True
+        )
+        at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
         at.run()
     assert not at.exception
     assert len(at.subheader) == 0

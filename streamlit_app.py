@@ -757,11 +757,13 @@ def main() -> None:
     if audio_file is not None and not use_segmentation:
         # Single-slot cache: getvalue() copies the full byte buffer each rerun,
         # so memoize the duration and recompute only when the file changes. One
-        # slot can't grow, so no eviction is needed.
-        cache_id = (audio_file.name, audio_file.size)
+        # slot can't grow, so no eviction is needed. Keyed on file_id, which
+        # Streamlit mints per upload (or recording) and keeps across reruns;
+        # (name, size) took a same-length replacement for a hit and served
+        # the stale duration.
         cached = st.session_state.get("_duration")
-        if cached is None or cached[0] != cache_id:
-            cached = (cache_id, audio_duration_seconds(audio_file))
+        if cached is None or cached[0] != audio_file.file_id:
+            cached = (audio_file.file_id, audio_duration_seconds(audio_file))
             st.session_state["_duration"] = cached
         duration = cached[1]
         if duration is not None and duration > MAX_VAD_OFF_DURATION_S:
@@ -774,9 +776,9 @@ def main() -> None:
                 icon=":material/warning:",
             )
 
-    input_key = (
-        (audio_file.name, audio_file.size, use_segmentation) if audio_file else None
-    )
+    # file_id rather than (name, size): a re-exported file or a second recording
+    # of the same length would otherwise keep the previous transcript on screen.
+    input_key = (audio_file.file_id, use_segmentation) if audio_file else None
     if input_key != st.session_state.get("_last_input_key"):
         for key in ("result", "result_stem"):
             st.session_state.pop(key, None)

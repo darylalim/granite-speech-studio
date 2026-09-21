@@ -7,10 +7,9 @@ This application uses, but does not redistribute, the following third-party
 models and libraries, each under its own license:
 
 - IBM Granite Speech 5.0 470M TurboCTC (Apache-2.0)
-- IBM Granite Guardian HAP 125m (Apache-2.0)
 - Silero VAD (MIT)
 - MLX / mlx-audio (MIT)
-- Streamlit, Hugging Face Transformers (Apache-2.0)
+- Streamlit (Apache-2.0)
 - PyTorch, torchaudio (BSD-3-Clause)
 - PyAV (BSD-3-Clause), bundling FFmpeg (LGPL-3.0-or-later)
 

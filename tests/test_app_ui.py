@@ -3,15 +3,15 @@
 These complement test_streamlit_app.py (which mocks `st` entirely and never
 exercises the UI wiring). AppTest re-executes streamlit_app.py in a fresh
 namespace on every .run(), so mocks must patch the SHARED upstream imports
-(mlx_audio, transformers, av) rather than streamlit_app.* — patching
-streamlit_app attributes does not cross AppTest's script-runner boundary, and
-clicking Run without an upstream patch would fetch the real ~0.9 GB speech
-model, the guardian and the MLX VAD checkpoint from the Hub.
+(mlx_audio, av) rather than streamlit_app.* — patching streamlit_app
+attributes does not cross AppTest's script-runner boundary, and clicking Run
+without an upstream patch would fetch the real ~0.9 GB speech model and the
+MLX VAD checkpoint from the Hub.
 
-The Run tests are hermetic: the speech model and the guardian are stubbed at
-their loaders, and the MLX VAD loader is made to fail so load_vad_model takes
-its documented fallback onto the PyTorch build that ships inside the silero-vad
-wheel — real VAD spans on the fixture, nothing downloaded.
+The Run tests are hermetic: the speech model is stubbed at its loader, and the
+MLX VAD loader is made to fail so load_vad_model takes its documented fallback
+onto the PyTorch build that ships inside the silero-vad wheel — real VAD spans
+on the fixture, nothing downloaded.
 """
 
 import tomllib
@@ -25,11 +25,10 @@ from unittest.mock import MagicMock, patch
 import av
 import pytest
 import streamlit as st
-import torch
 from streamlit import config
 from streamlit.testing.v1 import AppTest
 
-from streamlit_app import GUARDIAN_MODEL_ID, MODEL_ID, MODEL_REVISION
+from streamlit_app import MODEL_ID, MODEL_REVISION
 
 APP = Path(__file__).parent.parent / "streamlit_app.py"
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
@@ -76,26 +75,6 @@ def speech_loader() -> Iterator[MagicMock]:
 
 
 @contextmanager
-def _stub_guardian(toxic: bool) -> Iterator[MagicMock]:
-    """Patch the transformers entry points load_guardian_model goes through,
-    and yield the model class so a test can assert the load happened (or did
-    not). The tokenizer answers both call shapes check_safety uses with one
-    short encoding, and the model's logits pin the verdict: [4, -4] softmaxes to
-    p(toxic) ~ 3e-4, [-4, 4] to ~0.9997."""
-    tokenizer = MagicMock()
-    tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
-    model = MagicMock()
-    model.return_value.logits = torch.tensor([[-4.0, 4.0] if toxic else [4.0, -4.0]])
-    with (
-        patch("transformers.AutoTokenizer") as tokenizer_cls,
-        patch("transformers.AutoModelForSequenceClassification") as model_cls,
-    ):
-        tokenizer_cls.from_pretrained.return_value = tokenizer
-        model_cls.from_pretrained.return_value = model
-        yield model_cls
-
-
-@contextmanager
 def _header_duration(seconds: float) -> Iterator[MagicMock]:
     """Patch the shared `av.open` so audio_duration_seconds reads `seconds`
     from the (fake) stream header — no fixture is half an hour long. The
@@ -138,13 +117,10 @@ def _offline_mlx_vad() -> Iterator[MagicMock]:
         yield loader
 
 
-def _upload_and_run(
-    audio_bytes: bytes, *, use_segmentation: bool, use_toxicity_check: bool
-) -> AppTest:
+def _upload_and_run(audio_bytes: bytes, *, use_segmentation: bool) -> AppTest:
     at = _app().run()
     at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
     at.toggle(key="use_segmentation").set_value(use_segmentation)
-    at.toggle(key="use_toxicity_check").set_value(use_toxicity_check)
     at.run()
     at.button[0].click()
     at.run()
@@ -168,7 +144,7 @@ def _assert_single_result_card(at: AppTest) -> None:
 
 def test_default_state() -> None:
     """App renders without exception in the documented default widget state:
-    two toggles on, Run disabled, no results — and none of the prompt-era
+    one toggle on, Run disabled, no results — and none of the prompt-era
     controls (source language, task pills, keywords) anywhere in the tree."""
     at = _app().run()
     assert not at.exception
@@ -176,7 +152,7 @@ def test_default_state() -> None:
     assert len(at.segmented_control) == 0
     assert len(at.pills) == 0
     assert len(at.multiselect) == 0
-    assert {t.key for t in at.toggle} == {"use_segmentation", "use_toxicity_check"}
+    assert {t.key for t in at.toggle} == {"use_segmentation"}
     assert all(t.value is True for t in at.toggle)
     # Run is disabled until audio is loaded.
     assert at.button[0].disabled is True
@@ -195,13 +171,14 @@ def test_description_names_the_loaded_model() -> None:
 
 
 def test_faux_labels_are_bold() -> None:
-    """The VAD / Toxicity pseudo-labels render as bold markdown so they read
-    as form labels (the real widget labels are collapsed). Keywords went with
-    the prompt: CTC has nothing to bias."""
+    """The VAD pseudo-label renders as bold markdown so it reads as a form
+    label (the real widget label is collapsed). Keywords went with the prompt:
+    CTC has nothing to bias. Toxicity went with the guardian: there is no
+    second model to score the transcript."""
     at = _app().run()
     values = {m.value for m in at.markdown}
     assert "**VAD segmentation**" in values
-    assert "**Toxicity check**" in values
+    assert "**Toxicity check**" not in values
     assert "**Keywords**" not in values
 
 
@@ -274,39 +251,22 @@ def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:
     assert duration_slots == ["_duration"]
 
 
-@pytest.mark.parametrize(
-    ("toxic", "banner", "text", "icon"),
-    [
-        (False, "success", "Content is safe", ":material/check_circle:"),
-        (True, "warning", "Toxic content detected", ":material/warning:"),
-    ],
-)
-def test_run_with_toxicity_check_renders_banner(
-    audio_bytes: bytes,
-    speech_loader: MagicMock,
-    toxic: bool,
-    banner: str,
-    text: str,
-    icon: str,
+def test_run_with_vad_on_renders_a_timestamped_transcript(
+    audio_bytes: bytes, speech_loader: MagicMock
 ) -> None:
-    """VAD on, toxicity on: one card with a timestamped transcript and the
-    verdict banner the stubbed guardian dictates. The VAD path trims the
-    fixture's 0.76 s digital-silence lead-in, so the one segment starts past
-    zero (still formatting as 0:00) and is shorter than the clip."""
+    """VAD on: one card with a timestamped transcript and nothing else. The VAD
+    path trims the fixture's 0.76 s digital-silence lead-in, so the one segment
+    starts past zero (still formatting as 0:00) and is shorter than the clip."""
     with (
-        _stub_guardian(toxic) as guardian_cls,
         _offline_mlx_vad() as vad_loader,
         pytest.warns(RuntimeWarning, match="using the PyTorch VAD"),
     ):
-        at = _upload_and_run(
-            audio_bytes, use_segmentation=True, use_toxicity_check=True
-        )
+        at = _upload_and_run(audio_bytes, use_segmentation=True)
     _assert_single_result_card(at)
     # Guards: every model came from a patch, not the Hub.
     speech_loader.assert_called_once_with(
         MODEL_ID, revision=MODEL_REVISION, strict=True
     )
-    guardian_cls.from_pretrained.assert_called_once_with(GUARDIAN_MODEL_ID)
     vad_loader.assert_called_once()
 
     assert at.text[0].value == "[0:00 - 0:09] hello world"
@@ -317,31 +277,7 @@ def test_run_with_toxicity_check_renders_banner(
     full_clip = _fixture_samples()
     assert 0 < segment.shape[0] < full_clip
 
-    assert len(at.success) + len(at.warning) == 1
-    (element,) = getattr(at, banner)
-    assert element.value.startswith(text)
-    assert element.icon == icon
-
-
-def test_run_with_toxicity_check_off_renders_no_banner(
-    audio_bytes: bytes, speech_loader: MagicMock
-) -> None:
-    """Toxicity off: the card renders with neither banner, and the guardian is
-    never loaded — main() skips the load rather than passing a flag down."""
-    with (
-        _stub_guardian(toxic=True) as guardian_cls,
-        _offline_mlx_vad(),
-        pytest.warns(RuntimeWarning, match="using the PyTorch VAD"),
-    ):
-        at = _upload_and_run(
-            audio_bytes, use_segmentation=True, use_toxicity_check=False
-        )
-    _assert_single_result_card(at)
-    speech_loader.assert_called_once_with(
-        MODEL_ID, revision=MODEL_REVISION, strict=True
-    )
-    guardian_cls.from_pretrained.assert_not_called()
-    assert at.text[0].value == "[0:00 - 0:09] hello world"
+    # No status banner of any kind: the card is transcript and download only.
     assert len(at.success) == 0
     assert len(at.warning) == 0
 
@@ -351,10 +287,8 @@ def test_run_with_vad_off_transcribes_the_whole_clip(
 ) -> None:
     """VAD off: no VAD load, one inference over every sample of the clip, and
     one timestamped line spanning it."""
-    with _stub_guardian(toxic=False), _offline_mlx_vad() as vad_loader:
-        at = _upload_and_run(
-            audio_bytes, use_segmentation=False, use_toxicity_check=False
-        )
+    with _offline_mlx_vad() as vad_loader:
+        at = _upload_and_run(audio_bytes, use_segmentation=False)
     _assert_single_result_card(at)
     vad_loader.assert_not_called()
     speech_loader.assert_called_once_with(
@@ -371,18 +305,16 @@ def test_run_with_vad_off_transcribes_the_whole_clip(
 def test_changing_a_toggle_discards_the_result(
     audio_bytes: bytes, speech_loader: MagicMock
 ) -> None:
-    """The toggles are part of the input key, so flipping one after a run
-    drops the stale card instead of leaving it beside settings it no longer
+    """The toggle is part of the input key, so flipping it after a run drops
+    the stale card instead of leaving it beside a setting it no longer
     reflects."""
-    with _stub_guardian(toxic=False), _offline_mlx_vad():
-        at = _upload_and_run(
-            audio_bytes, use_segmentation=False, use_toxicity_check=False
-        )
+    with _offline_mlx_vad():
+        at = _upload_and_run(audio_bytes, use_segmentation=False)
         _assert_single_result_card(at)
         speech_loader.assert_called_once_with(
             MODEL_ID, revision=MODEL_REVISION, strict=True
         )
-        at.toggle(key="use_toxicity_check").set_value(True)
+        at.toggle(key="use_segmentation").set_value(True)
         at.run()
     assert not at.exception
     assert len(at.subheader) == 0

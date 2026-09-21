@@ -13,7 +13,6 @@ dependencies = [
     "streamlit",
     "torch",
     "torchaudio",
-    "transformers",
 ]
 
 [dependency-groups]

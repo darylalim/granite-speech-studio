@@ -18,7 +18,7 @@ import warnings
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, TypedDict
 
 import av
 
@@ -34,7 +34,6 @@ from mlx_audio.stt.utils import load_model as _load_stt_model
 from mlx_audio.vad.utils import load_model as _load_mlx_vad_model
 from silero_vad import get_speech_timestamps, load_silero_vad
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 warnings.filterwarnings(
     "ignore", message="An output with one or more elements was resized"
@@ -49,7 +48,6 @@ MODEL_ID = "ibm-granite/granite-speech-5.0-470m-turboctc"
 # would decode without complaint into different transcripts on the next cold
 # cache. The hash is what makes a transcript reproducible.
 MODEL_REVISION = "286456107c8ba1161f5c22dfe85466402c88333b"
-GUARDIAN_MODEL_ID = "ibm-granite/granite-guardian-hap-125m"
 # Silero VAD v6 in MLX form. Its 16 kHz weights are bit-exact with the
 # `silero-vad` PyPI checkpoint the PyTorch fallback loads, so the two backends
 # agree by construction rather than by luck — which is exactly what the pin
@@ -106,9 +104,9 @@ VAD_ENCODER_BATCH_CHUNKS = 2048
 # second of audio. That series is MLX alone: the Streamlit process also
 # holds the PyAV decode at the *source* rate and channel count (a 48 kHz
 # stereo hour is ~1.4 GB float32 before the mono and 16 kHz copies), the
-# upload bytes, the guardian and the torch/transformers baseline, so an hour
-# would land past 10 GB in-process. 30 minutes keeps the whole process
-# around 7 GB on a 16 GB Mac; with VAD on there is no such ceiling at all.
+# upload bytes and the torch baseline, so an hour would land past 10 GB
+# in-process. 30 minutes keeps the whole process around 7 GB on a 16 GB
+# Mac; with VAD on there is no such ceiling at all.
 MAX_VAD_OFF_DURATION_S = 1800
 # Target length for a segment fed to a single inference when VAD is on.
 # Merging in get_speech_segments never exceeds it, but an unbroken VAD span
@@ -127,14 +125,10 @@ MAX_SEGMENT_DURATION_S = 30.0
 # modestly over the cap is left whole rather than halved: with the floor above
 # half the cap, spans up to 2 x floor stay one part and only longer ones split.
 MIN_SEGMENT_DURATION_S = 20.0
-TOXICITY_THRESHOLD = 0.5
-TOXICITY_SCORE_PRECISION = 4
 
 
 class PipelineResult(TypedDict):
     transcript: str
-    is_toxic: NotRequired[bool]
-    toxicity_score: NotRequired[float]
 
 
 def is_video(filename: str) -> bool:
@@ -446,14 +440,6 @@ def get_speech_segments(
     ]
 
 
-def _verdict(probability: float) -> tuple[bool, float]:
-    """Shared toxic/score verdict so the two callers cannot drift apart."""
-    return (
-        probability > TOXICITY_THRESHOLD,
-        round(probability, TOXICITY_SCORE_PRECISION),
-    )
-
-
 @st.cache_resource(show_spinner=False)
 def load_model(model_id: str, revision: str | None = None) -> Any:
     # strict=True: mlx_audio's default is strict=False, which leaves any weight
@@ -621,13 +607,6 @@ def audio_duration_seconds(audio_file: UploadedFile) -> float | None:
 
 
 @st.cache_resource(show_spinner=False)
-def load_guardian_model(model_id: str) -> tuple[Any, Any]:
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForSequenceClassification.from_pretrained(model_id)
-    return model, tokenizer
-
-
-@st.cache_resource(show_spinner=False)
 def load_vad_model() -> Any:
     """Load the MLX Silero VAD v6 model, degrading to the PyTorch build.
 
@@ -656,38 +635,6 @@ def load_vad_model() -> Any:
     return model
 
 
-def check_safety(
-    text: str,
-    model: Any,
-    tokenizer: Any,
-) -> tuple[bool, float]:
-    # Guardian (RoBERTa) caps at 512 tokens. For inputs longer than that,
-    # chunk into 510-token windows (reserving 2 slots for CLS/SEP) and take
-    # the max — otherwise truncation would silently drop late content.
-    max_content_tokens = 510
-    encoding = tokenizer(
-        text, return_tensors="pt", truncation=False, add_special_tokens=False
-    )
-    input_ids = encoding["input_ids"][0]
-    if len(input_ids) <= max_content_tokens:
-        chunks = [text]
-    else:
-        chunks = [
-            tokenizer.decode(
-                input_ids[i : i + max_content_tokens], skip_special_tokens=True
-            )
-            for i in range(0, len(input_ids), max_content_tokens)
-        ]
-
-    max_probability = 0.0
-    for chunk in chunks:
-        inputs = tokenizer([chunk], padding=True, truncation=True, return_tensors="pt")
-        logits = model(**inputs).logits
-        probability = torch.softmax(logits, dim=1)[0, 1].item()
-        max_probability = max(max_probability, probability)
-    return _verdict(max_probability)
-
-
 def transcribe_audio(wav: torch.Tensor, model: Any) -> str:
     """One encoder pass and a greedy CTC collapse over a waveform slice.
 
@@ -701,25 +648,10 @@ def transcribe_audio(wav: torch.Tensor, model: Any) -> str:
     return model.generate(audio=wav.squeeze().numpy()).text
 
 
-def _aggregate_segment_safety(
-    texts: list[str], model: Any, tokenizer: Any
-) -> tuple[bool, float]:
-    max_probability = 0.0
-    for text in texts:
-        if not text.strip():
-            continue
-        _, probability = check_safety(text, model, tokenizer)
-        max_probability = max(max_probability, probability)
-    return _verdict(max_probability)
-
-
-@torch.inference_mode()
 def run_pipeline(
     wav: torch.Tensor,
     model: Any,
     vad_model: Any = None,
-    guardian_model: Any | None = None,
-    guardian_tokenizer: Any | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
     use_segmentation: bool = True,
 ) -> PipelineResult:
@@ -730,7 +662,6 @@ def run_pipeline(
         duration = wav.shape[-1] / SAMPLE_RATE
         segments = [{"start": 0.0, "end": duration}]
 
-    raw_texts: list[str] = []
     lines: list[str] = []
     total_steps = max(len(segments), 1)
     for step, seg in enumerate(segments):
@@ -742,27 +673,16 @@ def run_pipeline(
         start_sample = round(seg["start"] * SAMPLE_RATE)
         end_sample = round(seg["end"] * SAMPLE_RATE)
         text = transcribe_audio(wav[:, start_sample:end_sample], model)
-        raw_texts.append(text)
         ts_start = format_timestamp(seg["start"])
         ts_end = format_timestamp(seg["end"])
         lines.append(f"[{ts_start} - {ts_end}] {text}")
 
-    checking = guardian_model is not None and guardian_tokenizer is not None
     if on_progress:
-        # The guardian pass below is real work. Without this the bar would sit
-        # frozen at (total-1)/total for its whole duration, still labelled with
-        # the segment that already finished.
-        on_progress(total_steps, total_steps, "safety check" if checking else "results")
-    result: PipelineResult = {"transcript": "\n".join(lines)}
-    if checking:
-        # Per-segment so long transcripts don't get silently truncated by the
-        # guardian's 512-token cap; report the worst segment's score.
-        is_toxic, score = _aggregate_segment_safety(
-            raw_texts, guardian_model, guardian_tokenizer
-        )
-        result["is_toxic"] = is_toxic
-        result["toxicity_score"] = score
-    return result
+        # on_progress fires before each unit of work, so the last segment left
+        # the bar at (total-1)/total, still labelled with the segment that has
+        # already finished. Carry it to full before the caller renders results.
+        on_progress(total_steps, total_steps, "results")
+    return {"transcript": "\n".join(lines)}
 
 
 def _labeled_toggle(label: str, help: str, key: str, value: bool = True) -> bool:
@@ -778,14 +698,6 @@ def _render_result_card(result: PipelineResult, stem: str) -> None:
     with st.container(border=True):
         st.subheader("Transcription")
         st.text(transcript)
-        if "is_toxic" in result:
-            score = f"score: {result['toxicity_score']:.1%}"
-            if result["is_toxic"]:
-                st.warning(
-                    f"Toxic content detected ({score})", icon=":material/warning:"
-                )
-            else:
-                st.success(f"Content is safe ({score})", icon=":material/check_circle:")
         st.download_button(
             "",
             transcript,
@@ -862,16 +774,8 @@ def main() -> None:
                 icon=":material/warning:",
             )
 
-    use_toxicity_check = _labeled_toggle(
-        "Toxicity check",
-        help="Checks the transcription for toxic content via Granite Guardian.",
-        key="use_toxicity_check",
-    )
-
     input_key = (
-        (audio_file.name, audio_file.size, use_segmentation, use_toxicity_check)
-        if audio_file
-        else None
+        (audio_file.name, audio_file.size, use_segmentation) if audio_file else None
     )
     if input_key != st.session_state.get("_last_input_key"):
         for key in ("result", "result_stem"):
@@ -907,20 +811,10 @@ def main() -> None:
             def update_progress(i: int, total: int, label: str) -> None:
                 progress.progress(i / total, text=f"Processing: {label}...")
 
-            if use_toxicity_check:
-                with st.spinner("Loading safety model..."):
-                    guardian_model, guardian_tokenizer = load_guardian_model(
-                        GUARDIAN_MODEL_ID
-                    )
-            else:
-                guardian_model, guardian_tokenizer = None, None
-
             st.session_state.result = run_pipeline(
                 wav,
                 model,
                 vad_model,
-                guardian_model,
-                guardian_tokenizer,
                 on_progress=update_progress,
                 use_segmentation=use_segmentation,
             )

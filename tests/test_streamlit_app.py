@@ -20,7 +20,6 @@ from streamlit_app import (
     _MLX_VAD_BRANCH_ATTRS,
     _MLX_VAD_BRANCH_CONFIG_ATTRS,
     _MLX_VAD_CONFIG_ATTRS,
-    GUARDIAN_MODEL_ID,
     MAX_SEGMENT_DURATION_S,
     MAX_VAD_OFF_DURATION_S,
     MIN_AUDIO_SAMPLES,
@@ -35,7 +34,6 @@ from streamlit_app import (
     VAD_CONTEXT_SAMPLES,
     VIDEO_FORMATS,
     PipelineResult,
-    _aggregate_segment_safety,
     _decode_audio,
     _mlx_vad_probabilities,
     _mlx_vad_windows,
@@ -43,12 +41,10 @@ from streamlit_app import (
     _split_long_segment,
     _supports_mlx_vad,
     audio_duration_seconds,
-    check_safety,
     format_timestamp,
     get_speech_segments,
     is_video,
     load_and_preprocess_audio,
-    load_guardian_model,
     load_model,
     load_vad_model,
     run_pipeline,
@@ -62,12 +58,10 @@ from streamlit_app import (
 
 AUDIO_DIR = Path(__file__).parent / "data" / "audio"
 
-# Unwrap st.cache_resource / torch.inference_mode wrappers so tests call the
-# originals without going through Streamlit/torch machinery.
+# Unwrap st.cache_resource wrappers so tests call the originals without going
+# through Streamlit machinery.
 _load_model = load_model.__wrapped__  # ty: ignore[unresolved-attribute]
-_load_guardian_model = load_guardian_model.__wrapped__  # ty: ignore[unresolved-attribute]
 _load_vad_model = load_vad_model.__wrapped__  # ty: ignore[unresolved-attribute]
-_run_pipeline = run_pipeline.__wrapped__  # ty: ignore[unresolved-attribute]
 
 
 def make_upload(
@@ -166,23 +160,13 @@ def undecodable_mkv() -> bytes:
     return data.replace(b"A_MPEG/L3", b"A_AC4\0\0\0\0")
 
 
-def classification_calls(tokenizer: MagicMock) -> list:
-    """Filter a guardian-tokenizer mock to the classification-shape calls
-    only. check_safety also calls the tokenizer once per check to measure
-    input length (truncation=False, add_special_tokens=False); the actual
-    classification call uses padding=True."""
-    return [c for c in tokenizer.call_args_list if c.kwargs.get("padding") is True]
-
-
 class PipelineMocks(NamedTuple):
-    """The four positional arguments after `wav` in run_pipeline's signature:
-    (model, vad_model, guardian_model, guardian_tokenizer), in that order, so
-    tests can unpack with `*pipeline_mocks`."""
+    """The two positional arguments after `wav` in run_pipeline's signature:
+    (model, vad_model), in that order, so tests can unpack with
+    `*pipeline_mocks`."""
 
     model: MagicMock
     vad: MagicMock
-    guardian: MagicMock
-    guardian_tokenizer: MagicMock
 
 
 @pytest.fixture
@@ -192,11 +176,7 @@ def pipeline_mocks() -> PipelineMocks:
     # would conjure any other attribute the code reached for rather than fail.
     model = MagicMock(spec=["generate"])
     model.generate.return_value = MagicMock(text="decoded text")
-    guardian_tokenizer = MagicMock()
-    guardian_tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
-    guardian = MagicMock()
-    guardian.return_value.logits = torch.tensor([[5.0, -5.0]])
-    return PipelineMocks(model, MagicMock(), guardian, guardian_tokenizer)
+    return PipelineMocks(model, MagicMock())
 
 
 # ---------------------------------------------------------------------------
@@ -220,10 +200,6 @@ def test_model_revision_is_pinned() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", MODEL_REVISION)
 
 
-def test_guardian_model_id() -> None:
-    assert GUARDIAN_MODEL_ID == "ibm-granite/granite-guardian-hap-125m"
-
-
 def test_supported_formats() -> None:
     assert set(SUPPORTED_FORMATS) == {
         "wav",
@@ -245,8 +221,8 @@ def test_max_vad_off_duration_is_thirty_minutes() -> None:
     # block-local so there is no context to run out of, and peak MLX memory
     # grows linearly at ~2 MB per second of audio — measured 4.5 GB at 30
     # minutes and 7.8 GB at an hour. MLX is not the whole process, though:
-    # the PyAV decode at the source rate, the guardian and the torch
-    # baseline sit alongside it, which is what rules the hour out on 16 GB.
+    # the PyAV decode at the source rate and the torch baseline sit
+    # alongside it, which is what rules the hour out on 16 GB.
     assert MAX_VAD_OFF_DURATION_S == 1800
 
 
@@ -947,25 +923,6 @@ class TestLoadModel:
 
 
 @patch("streamlit_app.st")
-class TestLoadGuardianModel:
-    @patch("streamlit_app.AutoModelForSequenceClassification")
-    @patch("streamlit_app.AutoTokenizer")
-    def test_loads_model_and_tokenizer(
-        self,
-        mock_tokenizer_cls: MagicMock,
-        mock_model_cls: MagicMock,
-        _mock_st: MagicMock,
-    ) -> None:
-        result = _load_guardian_model("test-model")
-        mock_tokenizer_cls.from_pretrained.assert_called_once_with("test-model")
-        mock_model_cls.from_pretrained.assert_called_once_with("test-model")
-        assert result == (
-            mock_model_cls.from_pretrained.return_value,
-            mock_tokenizer_cls.from_pretrained.return_value,
-        )
-
-
-@patch("streamlit_app.st")
 class TestLoadVadModel:
     @patch("streamlit_app._load_mlx_vad_model")
     def test_loads_the_mlx_model(
@@ -996,95 +953,6 @@ class TestLoadVadModel:
         with pytest.warns(RuntimeWarning, match="internals have moved"):
             result = _load_vad_model()
         assert result is mock_torch.return_value
-
-
-# ---------------------------------------------------------------------------
-# Safety
-# ---------------------------------------------------------------------------
-
-
-class TestCheckSafety:
-    @staticmethod
-    def _mocks(logits: list[list[float]]) -> tuple[MagicMock, MagicMock]:
-        tokenizer = MagicMock()
-        tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
-        model = MagicMock()
-        model.return_value.logits = torch.tensor(logits)
-        return model, tokenizer
-
-    def test_safe_content(self) -> None:
-        model, tokenizer = self._mocks([[5.0, -5.0]])
-        is_toxic, score = check_safety("safe text", model, tokenizer)
-        assert is_toxic is False
-        assert score < 0.5
-
-    def test_toxic_content(self) -> None:
-        model, tokenizer = self._mocks([[-5.0, 5.0]])
-        is_toxic, score = check_safety("toxic text", model, tokenizer)
-        assert is_toxic is True
-        assert score > 0.5
-
-    def test_boundary_is_not_toxic(self) -> None:
-        model, tokenizer = self._mocks([[0.0, 0.0]])
-        is_toxic, score = check_safety("text", model, tokenizer)
-        assert score == 0.5
-        assert is_toxic is False
-
-    def test_tokenizer_called_with_classification_args(self) -> None:
-        # check_safety now calls the tokenizer twice for short inputs:
-        # once with the raw text (length check, no special tokens) and once
-        # with [text] in the standard classification shape. Verify the
-        # classification call is present.
-        model, tokenizer = self._mocks([[5.0, -5.0]])
-        check_safety("hello world", model, tokenizer)
-        tokenizer.assert_any_call(
-            ["hello world"], padding=True, truncation=True, return_tensors="pt"
-        )
-
-    def test_long_text_chunks_and_returns_max_score(self) -> None:
-        # 1099 tokens → 3 chunks (510, 510, 79). Aggregation must surface
-        # the toxic middle chunk, not average it away.
-        tokenizer = MagicMock()
-        tokenizer.return_value = {"input_ids": torch.tensor([list(range(1, 1100))])}
-        tokenizer.decode.return_value = "chunk text"
-        safe = MagicMock(logits=torch.tensor([[5.0, -5.0]]))
-        toxic = MagicMock(logits=torch.tensor([[-5.0, 5.0]]))
-        model = MagicMock(side_effect=[safe, toxic, safe])
-
-        is_toxic, score = check_safety("long text", model, tokenizer)
-        assert is_toxic is True
-        assert score > 0.5
-        assert model.call_count == 3
-
-
-class TestAggregateSegmentSafety:
-    @staticmethod
-    def _mocks(*score_pairs: tuple[float, float]) -> tuple[MagicMock, MagicMock]:
-        tokenizer = MagicMock()
-        tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
-        responses = [MagicMock(logits=torch.tensor([list(p)])) for p in score_pairs]
-        return MagicMock(side_effect=responses), tokenizer
-
-    def test_empty_list_returns_safe_zero(self) -> None:
-        tokenizer = MagicMock()
-        model = MagicMock()
-        assert _aggregate_segment_safety([], model, tokenizer) == (False, 0.0)
-        tokenizer.assert_not_called()
-        model.assert_not_called()
-
-    def test_skips_whitespace_only_segments(self) -> None:
-        model, tokenizer = self._mocks((5.0, -5.0))
-        is_toxic, _ = _aggregate_segment_safety(
-            ["", "   ", "real text"], model, tokenizer
-        )
-        assert is_toxic is False
-        assert model.call_count == 1
-
-    def test_returns_max_probability(self) -> None:
-        model, tokenizer = self._mocks((5.0, -5.0), (-5.0, 5.0), (5.0, -5.0))
-        is_toxic, score = _aggregate_segment_safety(["a", "b", "c"], model, tokenizer)
-        assert is_toxic is True
-        assert score > 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -1127,7 +995,6 @@ class TestTranscribeAudio:
 
 SEGMENT_9S = [{"start": 0.0, "end": 9.0}]
 SEGMENTS_3S = [{"start": 0.0, "end": 1.5}, {"start": 1.5, "end": 3.0}]
-CLASSIFICATION_KWARGS = {"padding": True, "truncation": True, "return_tensors": "pt"}
 
 
 class TestRunPipeline:
@@ -1141,11 +1008,11 @@ class TestRunPipeline:
     ) -> None:
         # A single PipelineResult: with the one-model, one-language pipeline
         # there is nothing to key by, so the exact key set is the TypedDict's.
-        result = _run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
-        assert set(result) == {"transcript", "is_toxic", "toxicity_score"}
+        result = run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
+        assert set(result) == {"transcript"}
 
     def test_single_segment_line_format(self, pipeline_mocks: PipelineMocks) -> None:
-        result = _run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
+        result = run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
         assert result["transcript"] == "[0:00 - 0:09] decoded text"
 
     def test_multi_segment_lines_are_timestamped_and_newline_joined(
@@ -1156,14 +1023,14 @@ class TestRunPipeline:
             MagicMock(text="second"),
         ]
         with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            result = _run_pipeline(torch.zeros(1, 48000), *pipeline_mocks)
+            result = run_pipeline(torch.zeros(1, 48000), *pipeline_mocks)
         assert result["transcript"] == "[0:00 - 0:01] first\n[0:01 - 0:03] second"
 
     def test_one_inference_per_segment_on_that_segment_slice(
         self, pipeline_mocks: PipelineMocks
     ) -> None:
         with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            _run_pipeline(torch.zeros(1, 48000), *pipeline_mocks)
+            run_pipeline(torch.zeros(1, 48000), *pipeline_mocks)
         calls = pipeline_mocks.model.generate.call_args_list
         # 1.5s slices at 16 kHz, one call per segment: the encoder pass is the
         # whole call, so there is nothing to share between segments.
@@ -1176,30 +1043,26 @@ class TestRunPipeline:
         with patch(
             "streamlit_app.get_speech_segments", return_value=SEGMENT_9S
         ) as mock_segments:
-            _run_pipeline(wav, *pipeline_mocks)
+            run_pipeline(wav, *pipeline_mocks)
         mock_segments.assert_called_once_with(wav, pipeline_mocks.vad)
 
     def test_segmentation_on_requires_a_vad_model(
         self, pipeline_mocks: PipelineMocks
     ) -> None:
         with pytest.raises(AssertionError, match="vad_model required"):
-            _run_pipeline(
+            run_pipeline(
                 torch.zeros(1, 160000),
                 pipeline_mocks.model,
                 None,
-                pipeline_mocks.guardian,
-                pipeline_mocks.guardian_tokenizer,
                 use_segmentation=True,
             )
 
     def test_segmentation_off_skips_vad(self, pipeline_mocks: PipelineMocks) -> None:
         with patch("streamlit_app.get_speech_segments") as mock_vad:
-            _run_pipeline(
+            run_pipeline(
                 torch.zeros(1, 16000),
                 pipeline_mocks.model,
                 None,
-                pipeline_mocks.guardian,
-                pipeline_mocks.guardian_tokenizer,
                 use_segmentation=False,
             )
         mock_vad.assert_not_called()
@@ -1217,12 +1080,10 @@ class TestRunPipeline:
     def test_segmentation_off_uses_full_audio(
         self, pipeline_mocks: PipelineMocks, samples: int
     ) -> None:
-        result = _run_pipeline(
+        result = run_pipeline(
             torch.zeros(1, samples),
             pipeline_mocks.model,
             None,
-            pipeline_mocks.guardian,
-            pipeline_mocks.guardian_tokenizer,
             use_segmentation=False,
         )
         pipeline_mocks.model.generate.assert_called_once()
@@ -1232,151 +1093,44 @@ class TestRunPipeline:
         expected_end = format_timestamp(samples / SAMPLE_RATE)
         assert result["transcript"] == f"[0:00 - {expected_end}] decoded text"
 
-    def test_progress_sequence_ends_with_the_safety_pass(
-        self, pipeline_mocks: PipelineMocks
+    @pytest.mark.parametrize(
+        ("segments", "expected"),
+        [
+            pytest.param(
+                SEGMENT_9S,
+                [(0, 1, "segment 1 of 1"), (1, 1, "results")],
+                id="one_segment",
+            ),
+            pytest.param(
+                SEGMENTS_3S,
+                [
+                    (0, 2, "segment 1 of 2"),
+                    (1, 2, "segment 2 of 2"),
+                    (2, 2, "results"),
+                ],
+                id="two_segments",
+            ),
+        ],
+    )
+    def test_progress_sequence_ends_with_results(
+        self,
+        pipeline_mocks: PipelineMocks,
+        segments: list[dict[str, float]],
+        expected: list[tuple[int, int, str]],
     ) -> None:
         calls: list[tuple[int, int, str]] = []
-        with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            _run_pipeline(
-                torch.zeros(1, 48000),
+        # 160000 samples covers both fixtures (SEGMENT_9S ends at 144000).
+        with patch("streamlit_app.get_speech_segments", return_value=segments):
+            run_pipeline(
+                torch.zeros(1, 160000),
                 *pipeline_mocks,
                 on_progress=lambda i, total, label: calls.append((i, total, label)),
             )
         # Fires before each unit of work, so the label names what is in flight;
-        # the closing (total, total) call is what carries the bar to full while
-        # the guardian pass runs, rather than leaving it frozen at (total-1)/total
-        # under the segment that already finished.
-        assert calls == [
-            (0, 2, "segment 1 of 2"),
-            (1, 2, "segment 2 of 2"),
-            (2, 2, "safety check"),
-        ]
-
-    def test_progress_final_label_when_no_safety_pass(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
-        calls: list[tuple[int, int, str]] = []
-        with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            _run_pipeline(
-                torch.zeros(1, 48000),
-                pipeline_mocks.model,
-                pipeline_mocks.vad,
-                None,
-                None,
-                on_progress=lambda i, total, label: calls.append((i, total, label)),
-            )
-        assert calls == [
-            (0, 2, "segment 1 of 2"),
-            (1, 2, "segment 2 of 2"),
-            (2, 2, "results"),
-        ]
-
-    def test_safety_fields_when_guardian_is_passed(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
-        result = _run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
-        assert result["is_toxic"] is False
-        assert "toxicity_score" in result
-
-    def test_toxic_content_flagged(self, pipeline_mocks: PipelineMocks) -> None:
-        pipeline_mocks.guardian.return_value.logits = torch.tensor([[-5.0, 5.0]])
-        result = _run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
-        assert result["is_toxic"] is True
-        assert result["toxicity_score"] > 0.5
-
-    def test_safety_check_receives_transcript(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
-        _run_pipeline(torch.zeros(1, 160000), *pipeline_mocks)
-        calls = classification_calls(pipeline_mocks.guardian_tokenizer)
-        assert len(calls) == 1
-        assert calls[0].args == (["decoded text"],)
-        assert calls[0].kwargs == CLASSIFICATION_KWARGS
-
-    @pytest.mark.parametrize(
-        "with_model, with_tokenizer",
-        [
-            pytest.param(True, False, id="model_only"),
-            pytest.param(False, True, id="tokenizer_only"),
-            pytest.param(False, False, id="neither"),
-        ],
-    )
-    def test_guardian_runs_only_with_both_model_and_tokenizer(
-        self, pipeline_mocks: PipelineMocks, with_model: bool, with_tokenizer: bool
-    ) -> None:
-        # There is no use_toxicity_check argument: main() simply does not load
-        # the guardian when the toggle is off, and the pipeline treats a missing
-        # half as "off" rather than calling into None.
-        calls: list[tuple[int, int, str]] = []
-        result = _run_pipeline(
-            torch.zeros(1, 160000),
-            pipeline_mocks.model,
-            pipeline_mocks.vad,
-            pipeline_mocks.guardian if with_model else None,
-            pipeline_mocks.guardian_tokenizer if with_tokenizer else None,
-            on_progress=lambda i, total, label: calls.append((i, total, label)),
-        )
-        assert set(result) == {"transcript"}
-        assert calls[-1] == (1, 1, "results")
-        pipeline_mocks.guardian.assert_not_called()
-        pipeline_mocks.guardian_tokenizer.assert_not_called()
-
-    def test_no_safety_keys_without_guardian(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
-        result = _run_pipeline(
-            torch.zeros(1, 160000), pipeline_mocks.model, pipeline_mocks.vad, None, None
-        )
-        assert "is_toxic" not in result
-        assert "toxicity_score" not in result
-
-    def test_multi_segment_safety_runs_per_segment(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
-        with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            _run_pipeline(torch.zeros(1, 48000), *pipeline_mocks)
-        calls = classification_calls(pipeline_mocks.guardian_tokenizer)
-        assert len(calls) == 2
-        for call in calls:
-            assert call.args == (["decoded text"],)
-            assert call.kwargs == CLASSIFICATION_KWARGS
-
-    def test_multi_segment_safety_reports_max_score(self) -> None:
-        # A single toxic segment must flag the whole transcript, even when
-        # surrounded by safe segments — i.e., aggregation is max, not mean.
-        model = MagicMock(spec=["generate"])
-        model.generate.return_value = MagicMock(text="decoded text")
-        tokenizer = MagicMock()
-        tokenizer.return_value = {"input_ids": torch.tensor([[1, 2, 3]])}
-        safe = MagicMock(logits=torch.tensor([[5.0, -5.0]]))
-        toxic = MagicMock(logits=torch.tensor([[-5.0, 5.0]]))
-        guardian = MagicMock(side_effect=[safe, toxic, safe])
-        segments = [
-            {"start": 0.0, "end": 1.0},
-            {"start": 1.0, "end": 2.0},
-            {"start": 2.0, "end": 3.0},
-        ]
-        with patch("streamlit_app.get_speech_segments", return_value=segments):
-            result = _run_pipeline(
-                torch.zeros(1, 48000), model, MagicMock(), guardian, tokenizer
-            )
-        assert result["is_toxic"] is True
-        assert result["toxicity_score"] > 0.5
-
-    def test_safety_skips_empty_segment_text(
-        self, pipeline_mocks: PipelineMocks
-    ) -> None:
-        # If the model returns "" for a segment, the guardian shouldn't be
-        # called for it — saves an inference and avoids spurious scores.
-        pipeline_mocks.model.generate.side_effect = [
-            MagicMock(text=""),
-            MagicMock(text="real transcript"),
-        ]
-        with patch("streamlit_app.get_speech_segments", return_value=SEGMENTS_3S):
-            _run_pipeline(torch.zeros(1, 48000), *pipeline_mocks)
-        calls = classification_calls(pipeline_mocks.guardian_tokenizer)
-        assert len(calls) == 1
-        assert calls[0].args == (["real transcript"],)
+        # the closing (total, total, "results") call is what carries the bar to
+        # full before the caller renders, rather than leaving it frozen at
+        # (total-1)/total under the segment that already finished.
+        assert calls == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1432,7 +1186,7 @@ class TestGraniteSpeech5Contract:
         networked runner the load *succeeds* by fetching 0.95 GB — per matrix
         leg, per run, with no cache step to amortise it. The try/except below
         stays for the other case, a cached snapshot that no longer loads.
-        `huggingface_hub` is a transitive import (via mlx_audio/transformers),
+        `huggingface_hub` is a transitive import (via mlx_audio),
         the same category as the undeclared `mlx` import CLAUDE.md documents.
 
         Fixture quirk, verified against the reference transformers
@@ -1489,33 +1243,9 @@ class TestRenderResultCard:
         _render_result_card(result, "test")
         mock_st.subheader.assert_called_once_with("Transcription")
 
-    def test_shows_safe_banner(self, mock_st: MagicMock) -> None:
-        result: PipelineResult = {
-            "transcript": "hello",
-            "is_toxic": False,
-            "toxicity_score": 0.1,
-        }
-        _render_result_card(result, "test")
-        msg = mock_st.success.call_args[0][0]
-        assert "safe" in msg.lower()
-        assert "10.0%" in msg
-        assert mock_st.success.call_args.kwargs["icon"] == ":material/check_circle:"
-        mock_st.warning.assert_not_called()
-
-    def test_shows_toxic_banner(self, mock_st: MagicMock) -> None:
-        result: PipelineResult = {
-            "transcript": "bad",
-            "is_toxic": True,
-            "toxicity_score": 0.9,
-        }
-        _render_result_card(result, "test")
-        msg = mock_st.warning.call_args[0][0]
-        assert "toxic" in msg.lower()
-        assert "90.0%" in msg
-        assert mock_st.warning.call_args.kwargs["icon"] == ":material/warning:"
-        mock_st.success.assert_not_called()
-
-    def test_no_safety_banner_without_toxic_field(self, mock_st: MagicMock) -> None:
+    def test_renders_no_status_banner(self, mock_st: MagicMock) -> None:
+        # The card is subheader + text + download button and nothing else; a
+        # guard against a success/warning banner coming back.
         result: PipelineResult = {"transcript": "hello"}
         _render_result_card(result, "test")
         mock_st.success.assert_not_called()

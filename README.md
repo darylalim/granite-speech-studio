@@ -7,7 +7,7 @@
 Streamlit application for English speech transcription using IBM Granite Speech 5.0 TurboCTC on Apple Silicon with MLX.
 
 <p align="center">
-  <img src="docs/screenshot-dark.png" alt="Granite Speech Studio in dark mode, showing a timestamped transcription of the sample clip with a toxicity check result" width="70%">
+  <img src="docs/screenshot-dark.png" alt="Granite Speech Studio in dark mode, showing a timestamped transcription of the sample clip" width="70%">
 </p>
 <p align="center"><em>Timestamped transcription of the sample clip, in dark mode.</em></p>
 
@@ -15,7 +15,6 @@ Streamlit application for English speech transcription using IBM Granite Speech 
 
 - **Transcription** — English, with IBM Granite Speech 5.0 TurboCTC (470M, encoder-only, greedy CTC); output is lowercase and unpunctuated
 - **VAD segmentation** — automatic speech detection with timestamped per-segment output, about 30 s per segment so timestamps stay readable — up to ~40 s for unbroken speech, since a forced split costs more than the overshoot (togglable; disable to process whole audio in one pass; auto-required for audio over 30 minutes)
-- **Toxicity check** — togglable (on by default); surfaces the worst per-segment toxicity score via Granite Guardian HAP 125m — always applies, since the output is always English
 - **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
 - **Light and dark modes** — Streamlit's built-in themes; follows the system setting, switchable from the app's settings menu
 - **Deferred loading** — models load on first pipeline run for instant page startup
@@ -23,15 +22,14 @@ Streamlit application for English speech transcription using IBM Granite Speech 
 
 ## How it works
 
-Three models run as a pipeline, loaded on first run and cached thereafter:
+Two models run as a pipeline, loaded on first run and cached thereafter:
 
 | Model | Role | Runs on |
 |-------|------|---------|
 | [Granite Speech 5.0 470M TurboCTC](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) | English transcription | Apple GPU (MLX) |
 | [Silero VAD v6](https://huggingface.co/mlx-community/silero-vad-v6) | Splits audio into speech segments | Apple GPU (MLX) |
-| [Granite Guardian HAP 125m](https://huggingface.co/ibm-granite/granite-guardian-hap-125m) | English toxicity detection | CPU |
 
-Audio is loaded and resampled to 16 kHz mono, optionally segmented with VAD, then transcribed segment-by-segment on the GPU — one encoder pass and a greedy CTC collapse per segment, with no prompt and no decoder. VAD runs on the GPU too, batching its encoder across chunks so a whole clip costs a couple of model calls rather than one per 32 ms; it falls back to the PyTorch build of the same checkpoint, on CPU, if the MLX weights are unavailable. With the toxicity check on, every segment's transcript is scored and the worst score is reported.
+Audio is loaded and resampled to 16 kHz mono, optionally segmented with VAD, then transcribed segment-by-segment on the GPU — one encoder pass and a greedy CTC collapse per segment, with no prompt and no decoder. VAD runs on the GPU too, batching its encoder across chunks so a whole clip costs a couple of model calls rather than one per 32 ms; it falls back to the PyTorch build of the same checkpoint, on CPU, if the MLX weights are unavailable.
 
 ## Requirements
 
@@ -48,7 +46,7 @@ uv sync
 uv run streamlit run streamlit_app.py
 ```
 
-> First run downloads the Granite Speech model (~0.9 GB) plus the VAD and guardian models, then caches them; inference runs on the Apple Silicon GPU.
+> First run downloads the Granite Speech model (~0.9 GB) plus the VAD model, then caches them; inference runs on the Apple Silicon GPU.
 
 ## Usage
 
@@ -56,16 +54,14 @@ uv run streamlit run streamlit_app.py
 
 1. Upload an audio or video file, or record from your microphone
 2. Optionally toggle **VAD segmentation** (on by default)
-3. Optionally toggle **Toxicity check** (on by default)
-4. Click **Transcribe**
-5. Read the timestamped transcript and download it as text
+3. Click **Transcribe**
+4. Read the timestamped transcript and download it as text
 
 ## Notes
 
 - **Apple Silicon only** — inference uses MLX; there's no CUDA or CPU-only fallback.
 - **English only** — Granite Speech 5.0 TurboCTC is an English ASR model; there is no translation and no other source language.
 - **Output is lowercase and unpunctuated** — the model's training transcripts were normalised that way, and the app does not restore casing or punctuation.
-- **Toxicity detection is English-only** (Granite Guardian HAP) — which is every transcription here; turn the check off to skip loading the guardian.
 - **Upload limit 500 MB**; with VAD off, clips are capped at 30 minutes — memory grows linearly with clip length (about 2 MB per second of audio), and a single inference over 30 minutes already peaks around 4.5 GB before counting the decoded audio held alongside it.
 
 ## Development
@@ -86,7 +82,7 @@ uv run pytest           # run tests
 
 ## Acknowledgements
 
-- [IBM Granite](https://huggingface.co/ibm-granite) — Speech and Guardian models
+- [IBM Granite](https://huggingface.co/ibm-granite) — Speech model
 - [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection ([MLX port](https://huggingface.co/mlx-community/silero-vad-v6))
 - [Apple MLX](https://github.com/ml-explore/mlx) and [mlx-audio](https://github.com/Blaizzy/mlx-audio) — on-device inference
 - [PyAV](https://pyav.org/) and [FFmpeg](https://ffmpeg.org/) — audio and video decoding

@@ -103,7 +103,10 @@ VAD_ENCODER_BATCH_CHUNKS = 2048
 # stereo hour is ~1.4 GB float32 before the mono and 16 kHz copies), the
 # upload bytes and the torch baseline, so an hour would land past 10 GB
 # in-process. 30 minutes keeps the whole process around 7 GB on a 16 GB
-# Mac; with VAD on there is no such ceiling at all.
+# Mac; with VAD on there is no such ceiling at all. Both process figures
+# include the since-removed guardian (125M fp32 parameters, ~500 MB; the
+# transformers import itself stays, since mlx_audio's loader pulls it in),
+# so they err high — the safe direction for a ceiling.
 MAX_VAD_OFF_DURATION_S = 1800
 # Target length for a segment fed to a single inference when VAD is on.
 # Merging in get_speech_segments never exceeds it, but an unbroken VAD span

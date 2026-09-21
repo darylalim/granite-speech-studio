@@ -222,7 +222,9 @@ def test_max_vad_off_duration_is_thirty_minutes() -> None:
     # grows linearly at ~2 MB per second of audio — measured 4.5 GB at 30
     # minutes and 7.8 GB at an hour. MLX is not the whole process, though:
     # the PyAV decode at the source rate and the torch baseline sit
-    # alongside it, which is what rules the hour out on 16 GB.
+    # alongside it, which is what rules the hour out on 16 GB (the ~7 GB and
+    # past-10 GB process figures in the constant's comment include the
+    # since-removed guardian and err ~0.5 GB high; the MLX peaks do not).
     assert MAX_VAD_OFF_DURATION_S == 1800
 
 

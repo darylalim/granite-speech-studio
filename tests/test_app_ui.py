@@ -279,6 +279,7 @@ def test_sidebar_model_line_names_the_loaded_model() -> None:
     linkColor, so the wrapper is asserted here too — dropping it would
     restore the size but not the contrast."""
     at = _app().run()
+    assert not at.exception
     (model_line,) = [m for m in at.sidebar.markdown if MODEL_ID in m.value]
     assert model_line.value.startswith(":small[")
     assert model_line.value.endswith("]")
@@ -300,6 +301,7 @@ def test_faux_labels_are_bold() -> None:
     CTC has nothing to bias. Toxicity went with the guardian: there is no
     second model to score the transcript."""
     at = _app().run()
+    assert not at.exception
     assert "**VAD segmentation**" in {m.value for m in at.sidebar.markdown}
     # The absence guards stay whole-tree: a faux-label creeping back next
     # to the uploader in main is exactly what they exist to catch.
@@ -425,18 +427,21 @@ def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:
         at.toggle(key="use_segmentation").set_value(False)
         at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
         at.run()
+        assert not at.exception
         first_id, first_duration = at.session_state["_duration"]
         assert first_id == at.file_uploader[0].value.file_id
         assert first_duration == pytest.approx(10.0, abs=0.05)
         assert opener.call_count == 1
 
         at.run()
+        assert not at.exception
         # A rerun without a new upload is a hit: same key, no second read.
         assert at.session_state["_duration"][0] == first_id
         assert opener.call_count == 1
 
         at.file_uploader[0].set_value(("a.wav", audio_bytes, "audio/wav"))
         at.run()
+        assert not at.exception
         # Same name, same bytes, new upload: a miss, read again, and the slot
         # now holds the new upload's id — overwritten in place, not accumulated.
         assert opener.call_count == 2
@@ -537,6 +542,35 @@ def test_reuploading_an_identical_file_discards_the_result(
     assert len(at.subheader) == 0
     assert "result" not in at.session_state
     assert "result_stem" not in at.session_state
+
+
+def test_undecodable_upload_shows_a_readable_error(speech_loader: MagicMock) -> None:
+    """An unreadable upload gets the one-line st.error, not a traceback — and
+    it gets it before the speech model loads, which is the whole reason the
+    decode runs first: on a cold cache the model is a ~0.95 GB fetch, and a
+    file that was never going to decode should not wait behind it.
+
+    The bar is emptied in a `finally`, so nothing is left half-filled beside
+    the error; there is no toast and no card."""
+    at = _app().run()
+    at.file_uploader[0].set_value(("bad.wav", b"not audio", "audio/wav"))
+    at.toggle(key="use_segmentation").set_value(False)
+    at.run()
+    at.button(key="transcribe").click().run()
+
+    assert not at.exception  # the RuntimeError is handled, not surfaced raw
+    (error,) = at.error
+    assert error.value.startswith("Failed to load audio file")
+    assert error.icon == ":material/error:"
+    # Decode before the model: the loader was never reached.
+    speech_loader.assert_not_called()
+    assert len(at.get("progress")) == 0  # finally: progress.empty()
+    assert len(at.toast) == 0
+    assert len(at.subheader) == 0
+    assert "result" not in at.session_state
+    # The error lands in the transcript slot, where the card would have.
+    _input_col, transcript = at.columns
+    assert len(transcript.error) == 1
 
 
 def test_config_theme_defines_both_palettes(app_config: dict) -> None:

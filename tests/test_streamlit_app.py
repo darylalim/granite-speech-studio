@@ -894,27 +894,29 @@ class TestAudioDurationSeconds:
 # ---------------------------------------------------------------------------
 
 
-@patch("streamlit_app.st")
+# spec=[] rather than a bare MagicMock, and `new=` so nothing is injected:
+# both loaders are the unwrapped originals and touch no st.* at all, so this
+# is a guard — any st. access inside them raises AttributeError here instead
+# of being silently absorbed by a mock that conjures whatever it is asked for.
+@patch("streamlit_app.st", new=MagicMock(spec=[]))
 class TestLoadModel:
     @patch("streamlit_app._load_stt_model")
     def test_calls_load_stt_model_and_returns_result(
-        self, mock_load: MagicMock, _mock_st: MagicMock
+        self, mock_load: MagicMock
     ) -> None:
         result = _load_model("test-model")
         mock_load.assert_called_once_with("test-model", revision=None, strict=True)
         assert result == mock_load.return_value
 
     @patch("streamlit_app._load_stt_model")
-    def test_forwards_revision_pin(
-        self, mock_load: MagicMock, _mock_st: MagicMock
-    ) -> None:
+    def test_forwards_revision_pin(self, mock_load: MagicMock) -> None:
         _load_model(MODEL_ID, MODEL_REVISION)
         mock_load.assert_called_once_with(
             MODEL_ID, revision=MODEL_REVISION, strict=True
         )
 
     @patch("streamlit_app._load_stt_model")
-    def test_loads_strictly(self, mock_load: MagicMock, _mock_st: MagicMock) -> None:
+    def test_loads_strictly(self, mock_load: MagicMock) -> None:
         # mlx_audio defaults to strict=False, which leaves any weight the
         # checkpoint fails to supply randomly initialised — and greedy CTC would
         # still decode, into confident nonsense. The VAD loader cannot avoid
@@ -927,12 +929,10 @@ class TestLoadModel:
         assert mock_load.call_args.kwargs["strict"] is True
 
 
-@patch("streamlit_app.st")
+@patch("streamlit_app.st", new=MagicMock(spec=[]))
 class TestLoadVadModel:
     @patch("streamlit_app._load_mlx_vad_model")
-    def test_loads_the_mlx_model(
-        self, mock_load: MagicMock, _mock_st: MagicMock
-    ) -> None:
+    def test_loads_the_mlx_model(self, mock_load: MagicMock) -> None:
         mock_load.return_value = make_mlx_vad_model()
         result = _load_vad_model()
         mock_load.assert_called_once_with(MLX_VAD_REPO, revision=MLX_VAD_REVISION)
@@ -941,7 +941,7 @@ class TestLoadVadModel:
     @patch("streamlit_app._torch_vad_model")
     @patch("streamlit_app._load_mlx_vad_model", side_effect=OSError("offline"))
     def test_falls_back_when_the_repo_will_not_load(
-        self, _mock_mlx: MagicMock, mock_torch: MagicMock, _mock_st: MagicMock
+        self, _mock_mlx: MagicMock, mock_torch: MagicMock
     ) -> None:
         with pytest.warns(RuntimeWarning, match="using the PyTorch VAD"):
             result = _load_vad_model()
@@ -950,7 +950,7 @@ class TestLoadVadModel:
     @patch("streamlit_app._torch_vad_model")
     @patch("streamlit_app._load_mlx_vad_model")
     def test_falls_back_when_the_internals_have_moved(
-        self, mock_mlx: MagicMock, mock_torch: MagicMock, _mock_st: MagicMock
+        self, mock_mlx: MagicMock, mock_torch: MagicMock
     ) -> None:
         # A rename upstream must degrade to the slower-but-correct path, not
         # surface as a crash on the first pipeline run.

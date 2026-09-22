@@ -32,7 +32,7 @@ backgroundColor = "#161616"           # Gray 100, $background: the page and the 
 secondaryBackgroundColor = "#262626"  # Gray 90, $layer-01: sidebar, dropzone, recorder, progress track; 1.2:1 step off the page
 textColor = "#e0e0e0"                 # Gray 20, not $text-primary #f4f4f4 (16.5:1): 13.7:1 on the page for 200 lines of transcript; captions at 60% opacity 5.6:1 page / 5.1:1 sidebar
 borderColor = "#525252"               # Gray 70, $border-subtle-01: card edge 2.3:1 on the page; dropzone rim and toggle-off track 1.9:1 on layer-01 (#393939 is 1.3:1 there)
-linkColor = "#78a9ff"                 # Blue 40, $link-primary: 6.4:1 on the sidebar; painted inside the 60% caption it is 3.3:1 (stock 2.8:1), the kept underline is the cue
+linkColor = "#78a9ff"                 # Blue 40, $link-primary: 6.4:1 on the sidebar, which is what the one link on the page now gets — it moved out of st.caption, whose 60% opacity had it at 3.3:1 (stock 2.8:1); keep links out of captions
 redColor = "#fa4d56"                  # Red 50, $support-error: st.error text derives to #fc979c, 6.75:1 on its tint (stock #ff6c6c is 4.8:1 on this page); that derived tone is also the recorder's recording pulse
 
 # Carbon White. Background stays stock white because the alert tints are
@@ -42,6 +42,6 @@ backgroundColor = "#ffffff"           # $background, equal to stock: the page, a
 secondaryBackgroundColor = "#f4f4f4"  # Gray 10, $layer-01: sidebar, dropzone, recorder, progress track; 1.1:1 step off the page
 textColor = "#161616"                 # Gray 100, $text-primary: 18.1:1; captions at 60% opacity 4.7:1 page / 4.6:1 sidebar (stock #31333f blends to 3.7:1)
 borderColor = "#c6c6c6"               # Gray 30, $border-subtle-01: card edge 1.7:1 on white, dropzone rim 1.55:1 on layer-01 (stock derived border 1.45:1; #e0e0e0 is 1.3:1)
-linkColor = "#0f62fe"                 # Blue 60, $link-primary: 5.0:1 on white, 4.55:1 on the sidebar; 2.5:1 painted inside the 60% caption, underline kept
+linkColor = "#0f62fe"                 # Blue 60, $link-primary: 5.0:1 on white, 4.55:1 on the sidebar; it was 2.5:1 while the model line was an st.caption, the worse half of why that line is st.markdown(":small[...]") now
 redColor = "#da1e28"                  # Red 60, $support-error: st.error text derives to #99151b, 7.2:1 on its tint (stock pair 4.6:1); that derived tone is also the recorder's recording pulse
 yellowTextColor = "#684e00"           # Yellow 70: the >30-minute VAD-off warning's text, 7.7:1 on the stock tint (stock #926c05 is 4.7:1); the tint stays stock so nothing derives from this

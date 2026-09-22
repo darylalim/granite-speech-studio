@@ -718,6 +718,11 @@ def _render_result_card(result: PipelineResult, stem: str) -> None:
                 key="dl_txt",
                 icon=":material/download:",
                 help="Download transcription",
+                # Nothing reads the return value and the result already lives
+                # in session state, so the default rerun does no work the app
+                # wants — and it remounts the card, since the emptied progress
+                # bar stops holding slot index 0 on the next run.
+                on_click="ignore",
             )
         st.text(transcript)
 
@@ -742,8 +747,19 @@ def main() -> None:
         # "English only" is the one thing a user needs to know before uploading:
         # the model transcribes anything into confident lowercase English-shaped
         # text, so a wrong-language clip fails silently without the cue.
-        st.caption(
-            f"Model: [{MODEL_ID}](https://huggingface.co/{MODEL_ID}) · English only"
+        #
+        # st.markdown(":small[...]"), not st.caption: caption dims everything
+        # inside it to 60% (the frontend sets opacity on the whole container),
+        # which drags the model-card link to 3.3:1 dark / 2.5:1 light — under
+        # the 4.5:1 this theme holds itself to, and the kept underline answers
+        # "don't rely on colour alone", not contrast. The :small[] directive
+        # sets font-size only, so the line keeps caption size at full
+        # linkColor: 6.4:1 dark, 4.55:1 light on the sidebar. Not :gray[] for
+        # the surrounding words — grayTextColor is a fixed built-in that lands
+        # at 3.58:1 on the light sidebar and reintroduces the failure.
+        st.markdown(
+            f":small[Model: [{MODEL_ID}](https://huggingface.co/{MODEL_ID}) "
+            "· English only]"
         )
 
     st.title("Granite Speech Studio")
@@ -758,7 +774,7 @@ def main() -> None:
             # it to sit beside, and the dropzone lists the accepted extensions
             # itself.
             uploaded = st.file_uploader(
-                "Upload audio file",
+                "Upload an audio or video file",
                 type=SUPPORTED_FORMATS,
                 label_visibility="collapsed",
             )
@@ -772,15 +788,27 @@ def main() -> None:
             else:
                 st.audio(audio_file)
             st.caption(audio_file.name if uploaded else "Recorded audio")
+            if uploaded and recorded:
+                # Both tabs hold a value: st.tabs renders both, so a recording
+                # made after an upload lands in the widget but loses the `or`
+                # above, with nothing on screen to say so. Say so. (Letting the
+                # visible tab pick the source instead would make merely peeking
+                # at Record set audio_file to None, move _last_input_key and
+                # drop the card.)
+                st.caption("Using the uploaded file. Clear it to use the recording.")
 
         vad_off_too_long = False
         if audio_file is not None and not use_segmentation:
-            # Single-slot cache: getvalue() copies the full byte buffer each
-            # rerun, so memoize the duration and recompute only when the file
-            # changes. One slot can't grow, so no eviction is needed. Keyed on
-            # file_id, which Streamlit mints per upload (or recording) and
-            # keeps across reruns; (name, size) took a same-length replacement
-            # for a hit and served the stale duration.
+            # Single-slot cache: av.open re-parses the container headers on
+            # every rerun, so memoize the duration and recompute only when the
+            # file changes. (getvalue() itself is O(1) — CPython hands back the
+            # same bytes object for an unmodified BytesIO, the copy-on-write
+            # UploadedFile.__init__ relies on; getbuffer() is the call that
+            # would force the copy, so don't reach for it.) One slot can't
+            # grow, so no eviction is needed. Keyed on file_id, which Streamlit
+            # mints per upload (or recording) and keeps across reruns; (name,
+            # size) took a same-length replacement for a hit and served the
+            # stale duration.
             cached = st.session_state.get("_duration")
             if cached is None or cached[0] != audio_file.file_id:
                 cached = (audio_file.file_id, audio_duration_seconds(audio_file))
@@ -824,24 +852,28 @@ def main() -> None:
     if run_clicked and can_run:
         assert audio_file is not None
         with transcript_slot:
-            progress = st.progress(0, text="Starting pipeline...")
+            progress = st.progress(0, text="Starting transcription...")
             try:
                 # Audio before the model: every decode-time RuntimeError
                 # (unreadable file, zero samples, under the 70 ms floor) then
                 # surfaces at once, instead of after a ~0.95 GB Hub fetch on a
-                # cold cache.
-                wav = load_and_preprocess_audio(audio_file)
-                with st.spinner("Loading speech model..."):
+                # cold cache. show_time on all three because both of those
+                # waits are long enough to look hung — minutes for the fetch,
+                # seconds to decode a 500 MB upload — and a static label gives
+                # no sign either is advancing.
+                with st.spinner("Decoding audio...", show_time=True):
+                    wav = load_and_preprocess_audio(audio_file)
+                with st.spinner("Loading speech model...", show_time=True):
                     model = load_model(MODEL_ID, MODEL_REVISION)
 
                 if use_segmentation:
-                    with st.spinner("Loading VAD model..."):
+                    with st.spinner("Loading VAD model...", show_time=True):
                         vad_model = load_vad_model()
                 else:
                     vad_model = None
 
                 def update_progress(i: int, total: int, label: str) -> None:
-                    progress.progress(i / total, text=f"Processing: {label}...")
+                    progress.progress(i / total, text=f"Transcribing {label}...")
 
                 st.session_state.result = run_pipeline(
                     wav,
@@ -859,7 +891,7 @@ def main() -> None:
                     )
                 st.session_state.result_stem = stem
             except RuntimeError as e:
-                st.error(str(e))
+                st.error(str(e), icon=":material/error:")
                 return
             except Exception as e:  # noqa: BLE001 - top-level UI error boundary
                 st.exception(e)
@@ -868,7 +900,9 @@ def main() -> None:
                 # Also on the error paths, or a half-filled bar labelled with
                 # the segment that failed stays on screen next to the error.
                 progress.empty()
-        st.toast("Pipeline complete!")
+        # The card carries no st.success banner by design, so this toast is
+        # the only success signal; an icon is what makes it read as one.
+        st.toast("Transcription complete", icon=":material/check_circle:")
 
     with transcript_slot:
         # Captions, not alerts: they sit where the card will appear. Nothing

@@ -34,6 +34,12 @@ import pytest
 import streamlit as st
 from streamlit import config
 from streamlit.proto.Block_pb2 import Block
+from streamlit.proto.Common_pb2 import FileURLs
+
+# UploadedFileRec has no public export (streamlit.typing carries UploadedFile
+# alone), and building a real one is what lets the recorder be faked with the
+# type the app actually receives rather than a duck.
+from streamlit.runtime.uploaded_file_manager import UploadedFile, UploadedFileRec
 from streamlit.testing.v1 import AppTest
 
 from streamlit_app import MODEL_ID, MODEL_REVISION, TRANSCRIPT_MAX_WIDTH_PX
@@ -147,6 +153,12 @@ def _assert_single_result_card(at: AppTest) -> None:
     assert download.key == "dl_txt"
     assert download.help == "Download transcription"
     assert download.icon == ":material/download:"
+    assert download.proto.ignore_rerun is True  # on_click="ignore"
+    # The card has no st.success banner by design, so the toast is the only
+    # completion signal — and the only thing that would notice it going quiet.
+    (toast,) = at.toast
+    assert toast.value == "Transcription complete"
+    assert toast.icon == ":material/check_circle:"
     assert at.session_state["result_stem"] == "sample_10s"
     # The card is in the transcript slot — the width-capped container in the
     # right column — and the slot holds nothing else: the next-step hint is
@@ -220,7 +232,11 @@ def test_sidebar_holds_settings_and_app_info_only() -> None:
     at = _app().run()
     assert not at.exception
     assert {t.key for t in at.sidebar.toggle} == {"use_segmentation"}
-    assert len(at.sidebar.caption) == 1
+    # Two markdown elements and no caption: the VAD faux-label and the model
+    # line, which is st.markdown(":small[...]") so its link escapes caption
+    # opacity (see the comment on the call). Both are pinned by value below.
+    assert len(at.sidebar.markdown) == 2
+    assert len(at.sidebar.caption) == 0
     assert len(at.sidebar.file_uploader) == 0
     # audio_input has no typed accessor on AppTest; get() filters by proto type.
     assert len(at.sidebar.get("audio_input")) == 0
@@ -252,20 +268,27 @@ def test_empty_state_keeps_the_grid() -> None:
     assert "Upload or record" in hint.value
 
 
-def test_sidebar_caption_names_the_loaded_model() -> None:
-    """The sidebar caption links the model card of the model the app
+def test_sidebar_model_line_names_the_loaded_model() -> None:
+    """The sidebar model line links the model card of the model the app
     actually loads and says English; there is no description under the
-    title any more (the title is the only text in main above the grid)."""
+    title any more (the title is the only text in main above the grid).
+
+    It is st.markdown with the :small[] directive rather than st.caption:
+    caption dims its whole subtree to 60%, which put the only link on the
+    page under 4.5:1 in both modes. :small[] is caption size at full
+    linkColor, so the wrapper is asserted here too — dropping it would
+    restore the size but not the contrast."""
     at = _app().run()
-    (caption,) = at.sidebar.caption
-    assert f"https://huggingface.co/{MODEL_ID}" in caption.value
-    assert MODEL_ID in caption.value
+    (model_line,) = [m for m in at.sidebar.markdown if MODEL_ID in m.value]
+    assert model_line.value.startswith(":small[")
+    assert model_line.value.endswith("]")
+    assert f"https://huggingface.co/{MODEL_ID}" in model_line.value
     # The one language cue on screen: the CTC model transcribes nothing
     # else, and a wrong-language clip fails silently without it.
-    assert "English" in caption.value
-    # By tree shape, not by element type: a description put back as a
-    # caption (the weight the model line now has) would pass a markdown
-    # count, and it would sit outside both columns, so nothing else sees it.
+    assert "English" in model_line.value
+    # By tree shape, not by element type: a description put back under the
+    # title as *any* element would pass a per-type count somewhere, and it
+    # would sit outside both columns, so nothing else on the page sees it.
     title, grid = at.main.children.values()
     assert title.type == "title"
     assert len(grid.columns) == 2
@@ -360,6 +383,31 @@ def test_vad_off_short_clip_shows_no_warning(audio_bytes: bytes) -> None:
     assert not at.exception
     assert len(at.warning) == 0
     assert at.button(key="transcribe").disabled is False
+
+
+def test_an_upload_beside_a_recording_says_which_one_wins(
+    audio_bytes: bytes,
+) -> None:
+    """st.tabs renders both tabs, so the uploader and the recorder can hold a
+    value at once and `uploaded or recorded` silently picks the upload. That
+    used to be a dead end — the caption kept naming the upload and Transcribe
+    kept using it, with nothing on screen to explain why the new recording did
+    nothing. The extra caption is the explanation, and it appears only when
+    both are set."""
+    rec = UploadedFileRec("rec-id", "recording.wav", "audio/wav", audio_bytes)
+    recording = UploadedFile(rec, FileURLs())
+    # The shared upstream command, not streamlit_app.audio_input: patching the
+    # module's own attribute does not cross AppTest's script-runner boundary.
+    with patch("streamlit.audio_input", return_value=recording):
+        at = _app().run()
+        assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
+        at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
+        at.run()
+    assert not at.exception
+    assert [c.value for c in at.columns[0].caption] == [
+        "sample_10s.wav",
+        "Using the uploaded file. Clear it to use the recording.",
+    ]
 
 
 def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:

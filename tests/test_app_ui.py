@@ -226,9 +226,13 @@ def test_page_config_is_wide() -> None:
 
 
 def test_sidebar_holds_settings_and_app_info_only() -> None:
-    """The sidebar is the VAD toggle and the model caption, nothing else; the
+    """The sidebar is the VAD faux-label and the model line, nothing else; the
     whole run flow — input tabs, Transcribe, the player and the transcript —
-    is in main, where it stays visible when the sidebar is collapsed."""
+    is in main, where it stays visible when the sidebar is collapsed.
+
+    Both are markdown and neither is a caption: the model line moved off
+    st.caption because caption opacity put its link under 4.5:1, so the
+    zero-caption assertion is the guard against one coming back."""
     at = _app().run()
     assert not at.exception
     assert {t.key for t in at.sidebar.toggle} == {"use_segmentation"}
@@ -281,12 +285,15 @@ def test_sidebar_model_line_names_the_loaded_model() -> None:
     at = _app().run()
     assert not at.exception
     (model_line,) = [m for m in at.sidebar.markdown if MODEL_ID in m.value]
-    assert model_line.value.startswith(":small[")
-    assert model_line.value.endswith("]")
-    assert f"https://huggingface.co/{MODEL_ID}" in model_line.value
-    # The one language cue on screen: the CTC model transcribes nothing
-    # else, and a wrong-language clip fails silently without it.
-    assert "English" in model_line.value
+    # The whole string, not startswith/endswith: ":small[Model:] [link](url)]"
+    # satisfies both ends while leaving the link outside the directive, which
+    # is precisely the mis-scoping that would put it back at caption size.
+    # The "English only" tail is the one language cue on screen — the CTC
+    # model transcribes anything, so a wrong-language clip fails silently
+    # without it — and it has to sit inside the directive too.
+    assert model_line.value == (
+        f":small[Model: [{MODEL_ID}](https://huggingface.co/{MODEL_ID}) · English only]"
+    )
     # By tree shape, not by element type: a description put back under the
     # title as *any* element would pass a per-type count somewhere, and it
     # would sit outside both columns, so nothing else on the page sees it.
@@ -405,11 +412,17 @@ def test_an_upload_beside_a_recording_says_which_one_wins(
         assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
         at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
         at.run()
+        assert not at.exception
+        assert [c.value for c in at.columns[0].caption] == [
+            "sample_10s.wav",
+            "Using the uploaded file. Clear it to use the recording.",
+        ]
+        # The caption is an instruction, so hold it to it: clearing the
+        # upload has to actually fall back to the recording.
+        at.file_uploader[0].set_value(None)
+        at.run()
     assert not at.exception
-    assert [c.value for c in at.columns[0].caption] == [
-        "sample_10s.wav",
-        "Using the uploaded file. Clear it to use the recording.",
-    ]
+    assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
 
 
 def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:
@@ -571,6 +584,39 @@ def test_undecodable_upload_shows_a_readable_error(speech_loader: MagicMock) -> 
     # The error lands in the transcript slot, where the card would have.
     _input_col, transcript = at.columns
     assert len(transcript.error) == 1
+
+
+def test_a_failed_rerun_does_not_leave_the_previous_card(
+    audio_bytes: bytes, speech_loader: MagicMock
+) -> None:
+    """A second Run over the same input keeps `_last_input_key`, so the first
+    run's result survives into it. If that second run then raises, the result
+    has to go: `st.error` paints for one frame only (alerts are not sticky),
+    so a kept result means the next rerun quietly re-renders the old
+    transcript with the error gone — reading as though the retry worked.
+
+    The failure is injected on the model rather than on `run_pipeline`:
+    AppTest re-executes the script in a fresh namespace, so patching a
+    `streamlit_app` attribute does not reach the code under test."""
+    with _offline_mlx_vad():
+        at = _upload_and_run(audio_bytes, use_segmentation=False)
+        _assert_single_result_card(at)
+
+        # The way an MLX allocation failure on a long clip surfaces.
+        generate = speech_loader.return_value.generate
+        generate.side_effect = RuntimeError("[metal::malloc] out of memory")
+        at.button(key="transcribe").click().run()
+        assert not at.exception
+        assert [e.value for e in at.error] == ["[metal::malloc] out of memory"]
+        assert len(at.subheader) == 0
+        assert "result" not in at.session_state
+        assert "result_stem" not in at.session_state
+
+        # And the next rerun must not bring it back.
+        at.run()
+    assert not at.exception
+    assert len(at.subheader) == 0
+    assert len(at.text) == 0
 
 
 def test_config_theme_defines_both_palettes(app_config: dict) -> None:

@@ -851,16 +851,28 @@ def main() -> None:
 
     if run_clicked and can_run:
         assert audio_file is not None
+        # Drop the previous run's result before starting, not after succeeding.
+        # A re-run over the same input keeps `_last_input_key`, so the result
+        # survives — and if this run then raises, `st.error` paints for exactly
+        # one frame (alerts are not sticky) while the stale card comes back on
+        # the next rerun, reading as though the retry had succeeded. Popping
+        # up front makes failure leave nothing behind; success overwrites both
+        # keys below, so the happy path is unchanged.
+        for stale in ("result", "result_stem"):
+            st.session_state.pop(stale, None)
         with transcript_slot:
             progress = st.progress(0, text="Starting transcription...")
             try:
                 # Audio before the model: every decode-time RuntimeError
                 # (unreadable file, zero samples, under the 70 ms floor) then
                 # surfaces at once, instead of after a ~0.95 GB Hub fetch on a
-                # cold cache. show_time on all three because both of those
-                # waits are long enough to look hung — minutes for the fetch,
-                # seconds to decode a 500 MB upload — and a static label gives
-                # no sign either is advancing.
+                # cold cache. show_time on all three for one consistent
+                # treatment, though only two of the waits can look hung —
+                # minutes for a cold-cache fetch, seconds to decode a 500 MB
+                # upload — and a static label gives no sign either is
+                # advancing. The VAD load is 0.59s cold and 0.027s warm, at or
+                # under st.spinner's own 0.5s delay, so its timer usually
+                # never paints; it carries the kwarg so the three read alike.
                 with st.spinner("Decoding audio...", show_time=True):
                     wav = load_and_preprocess_audio(audio_file)
                 with st.spinner("Loading speech model...", show_time=True):

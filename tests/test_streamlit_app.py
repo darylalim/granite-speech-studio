@@ -894,10 +894,16 @@ class TestAudioDurationSeconds:
 # ---------------------------------------------------------------------------
 
 
-# spec=[] rather than a bare MagicMock, and `new=` so nothing is injected:
-# both loaders are the unwrapped originals and touch no st.* at all, so this
-# is a guard — any st. access inside them raises AttributeError here instead
-# of being silently absorbed by a mock that conjures whatever it is asked for.
+# spec=[] rather than a bare MagicMock: both loaders are the unwrapped
+# originals and touch no st.* at all, so this is a guard — any st. access
+# inside them raises AttributeError here instead of being silently absorbed by
+# a mock that conjures whatever it is asked for. `new=` (not `new_callable=`)
+# because only `new=` leaves the created object out of the test signature,
+# and there is nothing here for a method to receive. It does build one mock at
+# decoration time and share it across the class, which is safe precisely
+# because of spec=[]: every attribute access, subscript and iteration raises,
+# so nothing can accumulate on it. Don't "fix" this into new_callable — that
+# injects the mock back into every signature as a parameter nobody uses.
 @patch("streamlit_app.st", new=MagicMock(spec=[]))
 class TestLoadModel:
     @patch("streamlit_app._load_stt_model")

@@ -136,8 +136,49 @@ class PipelineResult(TypedDict):
     transcript: str
 
 
+# (upload file_id, record file_id, "upload" | "record" | None) carried across
+# reruns in st.session_state so select_source can see what changed.
+type SourceState = tuple[str | None, str | None, str | None]
+
+
 def is_video(filename: str) -> bool:
     return Path(filename).suffix.lower().lstrip(".") in VIDEO_FORMATS
+
+
+def select_source(
+    upload_id: str | None,
+    record_id: str | None,
+    previous: SourceState,
+) -> SourceState:
+    """Decide which input tab supplies the audio, most recent wins.
+
+    Both tabs stay mounted, so the uploader and the recorder can hold a value
+    at the same time and a plain `uploaded or recorded` silently keeps the
+    upload — a recording made after one does nothing, with no way to say so.
+    Whichever widget's `file_id` changed since the last rerun is the source;
+    if neither changed the previous choice stands, and if the chosen one has
+    since been cleared the other takes over. Returns the state to carry into
+    the next rerun: `(upload_id, record_id, active)`.
+
+    Pure, and keyed on ids rather than the files themselves, so the whole
+    truth table is testable without a script run.
+    """
+    _prev_upload, _prev_record, active = previous
+    if upload_id is not None and upload_id != _prev_upload:
+        active = "upload"
+    elif record_id is not None and record_id != _prev_record:
+        active = "record"
+    # The active source may have been cleared since it was chosen.
+    if (active == "upload" and upload_id is None) or (
+        active == "record" and record_id is None
+    ):
+        active = None
+    if active is None:
+        if upload_id is not None:
+            active = "upload"
+        elif record_id is not None:
+            active = "record"
+    return upload_id, record_id, active
 
 
 def format_timestamp(seconds: float) -> str:
@@ -711,7 +752,14 @@ def _render_result_card(result: PipelineResult, stem: str) -> None:
             st.subheader("Transcription")
             st.space("stretch")
             st.download_button(
-                "",
+                # A real label, not "": download_button has no
+                # label_visibility to collapse one, and with an empty label
+                # the button's accessible name falls back to the Material
+                # glyph's ligature text — "download", which is serviceable
+                # only by luck of this icon's name (:material/file_download:
+                # would announce "file_download"). help= is a hover tooltip
+                # and contributes no name.
+                "Download",
                 transcript,
                 f"{stem}_transcription.txt",
                 "text/plain",
@@ -780,22 +828,21 @@ def main() -> None:
             )
         with record_tab:
             recorded = st.audio_input("Record audio", label_visibility="collapsed")
-        audio_file = uploaded or recorded
+        source = select_source(
+            uploaded.file_id if uploaded else None,
+            recorded.file_id if recorded else None,
+            st.session_state.get("_source", (None, None, None)),
+        )
+        st.session_state["_source"] = source
+        from_upload = source[2] == "upload"
+        audio_file = uploaded if from_upload else recorded if source[2] else None
 
         if audio_file:
             if is_video(audio_file.name):
                 st.video(audio_file)
             else:
                 st.audio(audio_file)
-            st.caption(audio_file.name if uploaded else "Recorded audio")
-            if uploaded and recorded:
-                # Both tabs hold a value: st.tabs renders both, so a recording
-                # made after an upload lands in the widget but loses the `or`
-                # above, with nothing on screen to say so. Say so. (Letting the
-                # visible tab pick the source instead would make merely peeking
-                # at Record set audio_file to None, move _last_input_key and
-                # drop the card.)
-                st.caption("Using the uploaded file. Clear it to use the recording.")
+            st.caption(audio_file.name if from_upload else "Recorded audio")
 
         vad_off_too_long = False
         if audio_file is not None and not use_segmentation:
@@ -848,6 +895,14 @@ def main() -> None:
     # the next-step hint, the progress bar and spinners during a run, an error,
     # and finally the card — so the eye never has to move.
     transcript_slot = transcript_col.container(width=TRANSCRIPT_MAX_WIDTH_PX)
+    # Claimed in every state, not just on a run: the progress bar used to be
+    # created inside the `if` below, so it held slot index 0 on the run's own
+    # rerun and nothing held it afterwards — the card sat at index 1, then at
+    # index 0 on the next rerun, and changing its delta path remounts it. An
+    # emptied placeholder renders display:none, so reserving it costs no
+    # layout and keeps the card at a fixed index the way the two-column grid
+    # keeps everything else fixed.
+    feedback = transcript_slot.empty()
 
     if run_clicked and can_run:
         assert audio_file is not None
@@ -861,7 +916,7 @@ def main() -> None:
         for stale in ("result", "result_stem"):
             st.session_state.pop(stale, None)
         with transcript_slot:
-            progress = st.progress(0, text="Starting transcription...")
+            progress = feedback.progress(0, text="Starting transcription...")
             try:
                 # Audio before the model: every decode-time RuntimeError
                 # (unreadable file, zero samples, under the 70 ms floor) then
@@ -894,7 +949,7 @@ def main() -> None:
                     on_progress=update_progress,
                     use_segmentation=use_segmentation,
                 )
-                if uploaded:
+                if from_upload:
                     stem = Path(audio_file.name).stem
                 else:
                     # Local wall-clock is what a user expects in a filename.
@@ -911,7 +966,9 @@ def main() -> None:
             finally:
                 # Also on the error paths, or a half-filled bar labelled with
                 # the segment that failed stays on screen next to the error.
-                progress.empty()
+                # Empties the placeholder, which stays in place holding the
+                # position for the next run.
+                feedback.empty()
         # The card carries no st.success banner by design, so this toast is
         # the only success signal; an icon is what makes it read as one.
         st.toast("Transcription complete", icon=":material/check_circle:")

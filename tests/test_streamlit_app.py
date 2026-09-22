@@ -49,6 +49,7 @@ from streamlit_app import (
     load_model,
     load_vad_model,
     run_pipeline,
+    select_source,
     silero_vad,
     transcribe_audio,
 )
@@ -278,6 +279,46 @@ def test_format_timestamp(seconds: float, expected: str) -> None:
 )
 def test_is_video(filename: str, expected: bool) -> None:
     assert is_video(filename) is expected
+
+
+@pytest.mark.parametrize(
+    ("upload_id", "record_id", "previous", "expected"),
+    [
+        # Nothing anywhere.
+        (None, None, (None, None, None), None),
+        # First value on either tab claims the source.
+        ("U", None, (None, None, None), "upload"),
+        (None, "R", (None, None, None), "record"),
+        # Whichever id changed this rerun wins, in both directions. The second
+        # is the case a plain `uploaded or recorded` could never reach: a
+        # recording made while an upload is still mounted.
+        ("U", "R", (None, "R", "record"), "upload"),
+        ("U", "R2", ("U", "R", "upload"), "record"),
+        # A new upload of the same name and size is still a new file_id.
+        ("U2", "R", ("U", "R", "record"), "upload"),
+        # Nothing changed, so the standing choice holds either way.
+        ("U", "R", ("U", "R", "upload"), "upload"),
+        ("U", "R", ("U", "R", "record"), "record"),
+        # Clearing the active source falls back to the other...
+        (None, "R", ("U", "R", "upload"), "record"),
+        ("U", None, ("U", "R", "record"), "upload"),
+        # ...and to nothing when there is no other.
+        (None, None, ("U", None, "upload"), None),
+    ],
+)
+def test_select_source(
+    upload_id: str | None,
+    record_id: str | None,
+    previous: tuple[str | None, str | None, str | None],
+    expected: str | None,
+) -> None:
+    """Most recently touched tab wins. The ids are carried straight through so
+    the next rerun can tell what changed."""
+    assert select_source(upload_id, record_id, previous) == (
+        upload_id,
+        record_id,
+        expected,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1265,7 +1306,15 @@ class TestRenderResultCard:
         result: PipelineResult = {"transcript": "hello world"}
         _render_result_card(result, "audio")
         args, kwargs = mock_st.download_button.call_args
-        assert args == ("", "hello world", "audio_transcription.txt", "text/plain")
+        # A real label, not "": download_button has no label_visibility, so
+        # an empty one leaves the button's accessible name to the Material
+        # glyph's ligature text.
+        assert args == (
+            "Download",
+            "hello world",
+            "audio_transcription.txt",
+            "text/plain",
+        )
         assert kwargs["key"] == "dl_txt"
         assert kwargs["help"] == "Download transcription"
         assert kwargs["icon"] == ":material/download:"

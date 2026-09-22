@@ -21,6 +21,7 @@ above it. Saying where an element lives makes the test document the layout
 instead of depending on iteration order.
 """
 
+import io
 import tomllib
 import wave
 from collections.abc import Iterator
@@ -107,6 +108,22 @@ def _header_duration(seconds: float) -> Iterator[MagicMock]:
     with patch("av.open") as opener:
         opener.return_value.__enter__.return_value = container
         yield opener
+
+
+_RECORDING_SAMPLES = 2 * 16000
+
+
+def _recording_bytes() -> bytes:
+    """A valid wav of a length the fixture does not share, so the sample count
+    handed to generate() identifies which source the run actually used —
+    a caption or a filename stem can be right while audio_file is wrong."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x01" * _RECORDING_SAMPLES)
+    return buf.getvalue()
 
 
 def _fixture_samples() -> int:
@@ -394,35 +411,91 @@ def test_vad_off_short_clip_shows_no_warning(audio_bytes: bytes) -> None:
     assert at.button(key="transcribe").disabled is False
 
 
-def test_an_upload_beside_a_recording_says_which_one_wins(
+def test_the_most_recently_touched_input_is_the_source(
     audio_bytes: bytes,
 ) -> None:
-    """st.tabs renders both tabs, so the uploader and the recorder can hold a
-    value at once and `uploaded or recorded` silently picks the upload. That
-    used to be a dead end — the caption kept naming the upload and Transcribe
-    kept using it, with nothing on screen to explain why the new recording did
-    nothing. The extra caption is the explanation, and it appears only when
-    both are set."""
+    """st.tabs keeps both tabs mounted, so the uploader and the recorder can
+    hold a value at once. `uploaded or recorded` used to settle that in the
+    upload's favour permanently: a recording made after an upload landed in
+    the widget and did nothing, with no way out but clearing the upload.
+    select_source makes the most recently changed widget the source, so each
+    tab's own value wins when the user touches it, and clearing the active
+    one falls back to the other."""
     rec = UploadedFileRec("rec-id", "recording.wav", "audio/wav", audio_bytes)
-    recording = UploadedFile(rec, FileURLs())
     # The shared upstream command, not streamlit_app.audio_input: patching the
     # module's own attribute does not cross AppTest's script-runner boundary.
-    with patch("streamlit.audio_input", return_value=recording):
+    with patch(
+        "streamlit.audio_input", return_value=UploadedFile(rec, FileURLs())
+    ) as recorder:
         at = _app().run()
         assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
+
+        # An upload lands after the recording and takes over.
         at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
         at.run()
         assert not at.exception
-        assert [c.value for c in at.columns[0].caption] == [
-            "sample_10s.wav",
-            "Using the uploaded file. Clear it to use the recording.",
-        ]
-        # The caption is an instruction, so hold it to it: clearing the
-        # upload has to actually fall back to the recording.
+        assert [c.value for c in at.columns[0].caption] == ["sample_10s.wav"]
+
+        # A NEW recording then takes it back — the case the old `or` lost.
+        # A fresh file_id is what makes it new; the widget is otherwise equal.
+        later = UploadedFileRec("rec-id-2", "recording.wav", "audio/wav", audio_bytes)
+        recorder.return_value = UploadedFile(later, FileURLs())
+        at.run()
+        assert not at.exception
+        assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
+
+        # A plain rerun changes nothing, so the choice stands.
+        at.run()
+        assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
+
+        # Clearing the inactive upload leaves the recording alone; clearing
+        # the active source falls back to whatever is left.
+        at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
+        at.run()
+        assert [c.value for c in at.columns[0].caption] == ["sample_10s.wav"]
         at.file_uploader[0].set_value(None)
         at.run()
     assert not at.exception
     assert [c.value for c in at.columns[0].caption] == ["Recorded audio"]
+
+
+def test_the_recording_supplies_the_download_stem_when_it_is_the_source(
+    audio_bytes: bytes, speech_loader: MagicMock
+) -> None:
+    """The stem follows the chosen source, not merely whether an upload
+    exists: with both set and the recording active, `uploaded` is still
+    truthy, and keying the stem on it would name the file after an upload the
+    transcript did not come from."""
+    clip = _recording_bytes()
+    rec = UploadedFileRec("rec-id", "recording.wav", "audio/wav", clip)
+    with (
+        _offline_mlx_vad(),
+        patch(
+            "streamlit.audio_input", return_value=UploadedFile(rec, FileURLs())
+        ) as recorder,
+    ):
+        at = _app().run()
+        # Upload first, so the recording has to be the later touch.
+        at.file_uploader[0].set_value(("sample_10s.wav", audio_bytes, "audio/wav"))
+        at.toggle(key="use_segmentation").set_value(False)
+        at.run()
+        assert at.session_state["_source"][2] == "upload"
+
+        later = UploadedFileRec("rec-id-2", "recording.wav", "audio/wav", clip)
+        recorder.return_value = UploadedFile(later, FileURLs())
+        at.run()
+        assert at.session_state["_source"][2] == "record"
+        at.button(key="transcribe").click().run()
+    assert not at.exception
+    # The upload is still mounted and still truthy — keying either the stem or
+    # audio_file on it rather than on the chosen source is the bug this pins.
+    assert at.file_uploader[0].value is not None
+    assert at.session_state["result_stem"].startswith("recording_")
+    # VAD is off, so generate() sees the whole clip: the sample count is which
+    # file was transcribed, and the two differ in length by construction.
+    generate = speech_loader.return_value.generate
+    assert generate.call_args.kwargs["audio"].shape == (_RECORDING_SAMPLES,)
+    assert _RECORDING_SAMPLES != _fixture_samples()
 
 
 def test_duration_cache_is_single_slot(audio_bytes: bytes) -> None:

@@ -491,23 +491,48 @@ def test_reuploading_an_identical_file_discards_the_result(
     assert "result_stem" not in at.session_state
 
 
-def test_config_defines_no_custom_theme(app_config: dict) -> None:
-    """No [theme] table, so the app gets Streamlit's built-in themes and the
-    settings menu offers System / Light / Dark. See CLAUDE.md for why writing
-    the defaults back in is not the same thing.
-
-    The second half is the guard that outlives this config: should a custom
-    theme ever be reintroduced, it has to define both sub-palettes. The
-    frontend only needs one of them — a [theme] table with nothing under
-    [theme.light] or [theme.dark] is what drops the appearance section and
-    locks the app to one mode (verified against 1.61.1 and 1.64.0 with a
-    table carrying only primaryColor), and either sub-table keeps the menu
-    with the other mode derived from [theme] — but a mode that is only
-    derived is a mode nobody reviewed, so both are demanded here."""
+def test_config_theme_defines_both_palettes(app_config: dict) -> None:
+    """A custom theme has to define both sub-palettes, or the settings menu
+    loses System / Light / Dark. The frontend only needs one of them — a
+    [theme] table with nothing under [theme.light] or [theme.dark] is what
+    drops the appearance section and locks the app to one mode (verified
+    against 1.61.1 and 1.64.0 with a table carrying only primaryColor), and
+    either sub-table keeps the menu with the other mode derived from [theme]
+    — but a mode that is only derived is a mode nobody reviewed, so both are
+    demanded here. The shipped theme (IBM Carbon, see CLAUDE.md) carries
+    both; conditional so that dropping the theme altogether stays a valid
+    state rather than a failing one."""
     if "theme" in app_config:
         # By value, not by header: an empty [theme.light] sets nothing, and the
-        # frontend keeps the menu only when a sub-palette carries a value.
-        assert app_config["theme"].get("light") and app_config["theme"].get("dark")
+        # frontend keeps the menu only when a sub-palette carries a value. It
+        # looks for one recursively, so a sub-table holding nothing but an
+        # empty [theme.light.sidebar] is empty to it too — a truthiness check
+        # on the parsed dict would pass that and ship the collapsed menu.
+        theme = app_config["theme"]
+        assert _carries_a_value(theme.get("light"))
+        assert _carries_a_value(theme.get("dark"))
+
+
+def _carries_a_value(table: object) -> bool:
+    """Whether a parsed TOML table sets at least one option, however nested:
+    the frontend's own test for whether a sub-palette exists."""
+    if isinstance(table, dict):
+        return any(_carries_a_value(child) for child in table.values())
+    return table is not None
+
+
+@pytest.mark.parametrize(
+    ("table", "expected"),
+    [
+        (None, False),
+        ({}, False),
+        ({"sidebar": {}}, False),  # an empty nested header sets nothing
+        ({"primaryColor": "#0f62fe"}, True),
+        ({"sidebar": {"backgroundColor": "#262626"}}, True),  # a nested value counts
+    ],
+)
+def test_carries_a_value(table: object, expected: bool) -> None:
+    assert _carries_a_value(table) is expected
 
 
 def _option_paths(table: dict, valid: set[str]) -> Iterator[str]:
@@ -563,7 +588,7 @@ def test_option_paths_stops_at_registered_options(
 
 def test_config_has_no_invalid_options(app_config: dict) -> None:
     """Every key in config.toml is a registered Streamlit config option.
-    Unknown keys are dropped silently rather than rejected, so a typo (or an
+    Unknown keys are logged and dropped rather than rejected, so a typo (or an
     option that only ever existed in a sibling table, as `base` does for
     [theme] but not [theme.light]) would otherwise go unnoticed."""
     valid = set(config._config_options_template)

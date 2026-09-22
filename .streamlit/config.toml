@@ -1,16 +1,47 @@
-# No [theme] section on purpose: the app uses Streamlit's built-in light and
-# dark themes, so the settings menu offers System / Light / Dark. Every theme
-# option defaults to None (unset), which is what tells the frontend to apply its
-# own palette — writing the default values back in would not be equivalent.
-# A partial custom theme is worse than none: verified on 1.61.1 and 1.64.0, a
-# [theme] table with nothing under [theme.light] or [theme.dark] drops the
-# appearance section from the menu outright and locks the app to one mode.
-# Either sub-table keeps the menu (the other mode is derived from [theme]), but
-# the test demands both: a derived mode is one nobody reviewed. Both or neither.
+# IBM Carbon palette, dark first: Gray 100 tokens for dark, White tokens for
+# light, and one accent, Blue 60, Carbon's $button-primary in every theme. It
+# is the lightest Carbon blue whose white button text clears AA (5.0:1; Blue
+# 50 is 3.3:1), and that settles the tradeoff no dark theme escapes: no colour
+# is both >= 4.5:1 under white and >= 4.5:1 as text on near-black, so the
+# selected tab label (14px in primaryColor) sits at 3.6:1 with the 2px
+# indicator carrying selection. Stock fails the other way: 5.7 tab, 3.3 button.
+# Only what the app renders is themed: no green (nothing renders st.success),
+# no chart, dataframe, metric or code keys, no fonts (the bundled Source Sans 3
+# needs no fetch and no static/ dir; a hosted IBM Plex would need the fetch, a
+# self-hosted one the dir). Backgrounds are written out because they are the
+# other half of every ratio here, and every ratio was recomputed. Anything
+# unset inherits the mode's built-in value.
 #
 # This block sits above [server] deliberately. TOML scoping is positional, so a
 # key added under a comment that trails a table header joins that table — put
-# theme options beneath a [theme] header of their own, not here.
+# theme options beneath the [theme] headers below, not here.
 
 [server]
 maxUploadSize = 500
+
+# Mode-agnostic. The accent is one value because the band where white text
+# reaches 4.5:1 on it does not depend on the surface it sits on.
+[theme]
+primaryColor = "#0f62fe"  # Blue 60: white label 5.0:1 (hover #0144c1 8.1:1); tab label 3.6:1 dark / 5.0:1 light; toggle track and progress fill 3.0:1 on #262626, 4.55:1 on #f4f4f4
+baseRadius = "none"       # Carbon is square: buttons, fields, card, alerts, toast (buttonRadius follows it; the toggle uses radii.full and stays round)
+showWidgetBorder = true   # the only thing that draws an edge on the dropzone and the recorder; without it both are a 1.2:1 slab in dark
+
+# Carbon Gray 100.
+[theme.dark]
+backgroundColor = "#161616"           # Gray 100, $background: the page and the transcript's ground
+secondaryBackgroundColor = "#262626"  # Gray 90, $layer-01: sidebar, dropzone, recorder, progress track; 1.2:1 step off the page
+textColor = "#e0e0e0"                 # Gray 20, not $text-primary #f4f4f4 (16.5:1): 13.7:1 on the page for 200 lines of transcript; captions at 60% opacity 5.6:1 page / 5.1:1 sidebar
+borderColor = "#525252"               # Gray 70, $border-subtle-01: card edge 2.3:1 on the page; dropzone rim and toggle-off track 1.9:1 on layer-01 (#393939 is 1.3:1 there)
+linkColor = "#78a9ff"                 # Blue 40, $link-primary: 6.4:1 on the sidebar; painted inside the 60% caption it is 3.3:1 (stock 2.8:1), the kept underline is the cue
+redColor = "#fa4d56"                  # Red 50, $support-error: st.error text derives to #fc979c, 6.75:1 on its tint (stock #ff6c6c is 4.8:1 on this page); that derived tone is also the recorder's recording pulse
+
+# Carbon White. Background stays stock white because the alert tints are
+# derived as a wash over it: st.warning and st.error hold their ratios on it.
+[theme.light]
+backgroundColor = "#ffffff"           # $background, equal to stock: the page, and what the alert tints and every light ratio here are measured against
+secondaryBackgroundColor = "#f4f4f4"  # Gray 10, $layer-01: sidebar, dropzone, recorder, progress track; 1.1:1 step off the page
+textColor = "#161616"                 # Gray 100, $text-primary: 18.1:1; captions at 60% opacity 4.7:1 page / 4.6:1 sidebar (stock #31333f blends to 3.7:1)
+borderColor = "#c6c6c6"               # Gray 30, $border-subtle-01: card edge 1.7:1 on white, dropzone rim 1.55:1 on layer-01 (stock derived border 1.45:1; #e0e0e0 is 1.3:1)
+linkColor = "#0f62fe"                 # Blue 60, $link-primary: 5.0:1 on white, 4.55:1 on the sidebar; 2.5:1 painted inside the 60% caption, underline kept
+redColor = "#da1e28"                  # Red 60, $support-error: st.error text derives to #99151b, 7.2:1 on its tint (stock pair 4.6:1); that derived tone is also the recorder's recording pulse
+yellowTextColor = "#684e00"           # Yellow 70: the >30-minute VAD-off warning's text, 7.7:1 on the stock tint (stock #926c05 is 4.7:1); the tint stays stock so nothing derives from this

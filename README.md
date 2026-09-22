@@ -16,7 +16,7 @@ Streamlit application for English speech transcription using IBM Granite Speech 
 - **Transcription** — English, with IBM Granite Speech 5.0 TurboCTC (470M, encoder-only, greedy CTC); output is lowercase and unpunctuated
 - **VAD segmentation** — automatic speech detection with timestamped per-segment output, about 30 s per segment so timestamps stay readable — up to ~40 s for unbroken speech, since a forced split costs more than the overshoot (togglable; disable to process whole audio in one pass; auto-required for audio over 30 minutes)
 - **Audio input** — upload audio (WAV, FLAC, M4A, MP3, OGG, AAC) or video (MP4, MOV, WebM, MKV — audio track is extracted) or record from microphone
-- **Light and dark modes** — Streamlit's built-in themes; follows the system setting, switchable from the app's settings menu
+- **Light and dark modes** — an IBM Carbon palette in both (Gray 100 dark, White light, one Blue 60 accent); follows the system setting, switchable from the app's settings menu
 - **Deferred loading** — models load on first pipeline run for instant page startup
 - **Export** — download the transcription as text
 
